@@ -2,7 +2,7 @@
 
 All notable changes to OpenShaker are listed here. Versions follow [semantic versioning](https://semver.org/).
 
-## [1.0.2] - unreleased
+## [1.0.2] - 2026-09-28
 
 ### Added
 - **Automatic updates, off by default.** Nothing installs by itself unless you say so.

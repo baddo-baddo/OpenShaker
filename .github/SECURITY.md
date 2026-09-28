@@ -23,15 +23,18 @@ To help you judge a report's impact:
   shared memory and connects to Openplanet's Data Sender on 127.0.0.1 (TCP 28765) for Trackmania. A
   second start of the app talks to the running one over 127.0.0.1 (TCP 49731) to bring its window up.
 - Its only internet traffic is the **update check** (from 1.0.1): about 30 seconds after it starts and then
-  once a day (sooner, after 10 minutes, 1 hour and 4 hours, if the network was down, and once more when you
-  click **Update now**), it asks `api.github.com` for this repository's latest release, over HTTPS, with no
+  once a day (sooner, after 10 minutes, 1 hour and 4 hours, if the network was down, and once more before
+  an update is downloaded), it asks `api.github.com` for this repository's latest release, over HTTPS, with no
   account and nothing about you or your PC beyond the request itself. **Advanced... > Check for updates** turns it
   off completely. **Send feedback** only opens the GitHub issue page in your browser.
-- Nothing is downloaded until you click **Update now**. Then it downloads only
-  `OpenShaker-Setup-X.Y.Z.exe` and its `.sha256` file from that release on GitHub (HTTPS, GitHub hosts
-  only, checked on every redirect), checks the installer's size and SHA-256, and deletes it without
-  running it if either check fails. The verified installer runs without administrator rights.
-  The checksum comes from the same release, so it protects against damaged or swapped downloads, not
-  against a compromised GitHub account; the installer is not code-signed yet.
+- Nothing is downloaded until you click **Update now**, or, only if you switched on **Install updates
+  automatically** (from 1.0.2; off unless you say yes), until no game has run or sent data for 5 minutes.
+  Then it downloads only `OpenShaker-Setup-X.Y.Z.exe` from that release on GitHub (HTTPS, GitHub hosts
+  only, checked on every redirect), checks its size and its SHA-256 against the ones GitHub lists for that
+  file in the release, and deletes it without running it if either check fails; without a SHA-256 from
+  GitHub it downloads nothing. (1.0.1 read the SHA-256 from a separate `.sha256` file instead.) The
+  verified installer runs without administrator rights. The SHA-256 is GitHub's own record of the
+  release file, so it protects against damaged or swapped downloads, not against a compromised GitHub
+  account; the installer is not code-signed yet.
 - It installs per user, without administrator rights, into `%LOCALAPPDATA%\Programs\OpenShaker`, and
   keeps its settings in `%APPDATA%\OpenShaker`.
