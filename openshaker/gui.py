@@ -280,7 +280,7 @@ class App:
 
         root.title(f"{APP_NAME} {__version__}")
         root.minsize(560, 620)
-        ico = PROJECT_DIR / "openshaker.ico"
+        ico = paths.ICON
         if ico.exists():
             try:
                 root.iconbitmap(str(ico))

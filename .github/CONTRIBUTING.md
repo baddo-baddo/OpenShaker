@@ -41,7 +41,7 @@ Run the tests before you send a change:
 - **Match the code around you**: naming, comment style and the plain-language docs.
 - **Keep changes focused**: one fix or feature per pull request, with a test when behaviour changes.
 - **Docs count**: if a change affects what users see, update the README or the guide in `docs/wiki/`.
-- The installer is built with `build.bat` (64-bit Python 3.13 and Inno Setup 6); see
+- The installer is built with `installer\build.bat` (64-bit Python 3.13 and Inno Setup 6); see
   [docs/DEVELOPMENT.md](../docs/DEVELOPMENT.md) for how the code fits together and
   [docs/CALIBRATION.md](../docs/CALIBRATION.md) for the tuning tools.
 

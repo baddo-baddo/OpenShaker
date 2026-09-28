@@ -308,7 +308,7 @@ class GuiHookTests(unittest.TestCase):
         from test_tray import FakeIcon
         real_icon, tray.pystray.Icon = tray.pystray.Icon, FakeIcon
         self.addCleanup(setattr, tray.pystray, "Icon", real_icon)
-        t = tray.Tray(app, ROOT / "openshaker.ico")
+        t = tray.Tray(app, ROOT / "openshaker" / "openshaker.ico")
         self.assertTrue(t.active)
         return t, [i for i in t.icon.menu if str(i).strip("- ")]
 

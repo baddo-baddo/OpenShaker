@@ -12,7 +12,7 @@ All notable changes to OpenShaker are listed here. Versions follow [semantic ver
     installs it and starts OpenShaker again, without an administrator prompt.
   - Nothing is downloaded before you click it.
   - Switch the check off under **Advanced... > Check for updates**
-    ([how updating works](docs/wiki/Start-With-Windows-Updates-and-Uninstalling.md#updating)).
+    ([how updating works](wiki/Start-With-Windows-Updates-and-Uninstalling.md#updating)).
 
 ### Changed
 - The window no longer opens about 1,480 px wide: the status and game-source lines wrap at the window's
@@ -37,7 +37,7 @@ The first public release.
 ### Feel
 - Engine, gear shifts, shift light, wheel lock and slip, ABS, road rumble, kerbs, crashes and
   acceleration, tuned to match HaptiConnect 2.7.0's output on recorded laps
-  ([how it was tuned](docs/HOW_IT_WAS_TUNED.md)). The short hits are generated from measured numbers;
+  ([how it was tuned](HOW_IT_WAS_TUNED.md)). The short hits are generated from measured numbers;
   no recorded audio is included.
 - One preset per game with a strength slider for every effect; the preset follows the game you drive.
 - An output limiter, left-channel output by default (Right or Both selectable) and a quieter Demo mode.

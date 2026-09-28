@@ -16,13 +16,20 @@
   <img src="https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6" alt="Windows 10 and 11">
 </p>
 
+<p align="center">
+  <a href="docs/HOW_IT_WAS_TUNED.md"><img src="docs/images/hapticonnect_vs_openshaker.png" width="49%" alt="Spectrograms of HaptiConnect's recorded output and OpenShaker's on the same Forza Motorsport lap, never used for tuning: the same engine sweeps, gear shifts and bumps, 0.2 dB apart in loudness"></a>
+  <img src="docs/images/window.png" width="49%" alt="The OpenShaker window while Forza Horizon 5 is driving: the preset, live telemetry, the output level and the fourteen effect sliders">
+</p>
+<p align="center">
+  <sub>Left: HaptiConnect and OpenShaker on a Forza Motorsport lap never used for tuning, 0.2 dB apart
+  (<a href="docs/HOW_IT_WAS_TUNED.md">how it was tuned</a>). Right: the OpenShaker window.</sub>
+</p>
+
 OpenShaker is a small Windows app that reads what your racing game reports - engine revs, gear
 changes, bumps, crashes, wheel lock and slip - and turns it into vibration you feel through your seat.
 It plays the effects to your shaker like sound. Forza, Assetto Corsa EVO and BeamNG.drive need nothing
 extra, just their own telemetry setting; Trackmania needs Openplanet (free,
 [openplanet.dev](https://openplanet.dev)) with its Data Sender plugin.
-
-![The OpenShaker window while Forza Horizon 5 is driving: the preset, live telemetry, the output level and the fourteen effect sliders](docs/images/window.png)
 
 ## Download and install
 
@@ -100,6 +107,8 @@ grouped in seven chapters:
 6. **[Help](docs/wiki/Troubleshooting.md)** - troubleshooting, FAQ and glossary.
 7. **[Behind the scenes](docs/HOW_IT_WAS_BUILT.md)** - how it was built, and
    [how it was tuned](docs/HOW_IT_WAS_TUNED.md) against HaptiConnect.
+
+What changed in each version: the [changelog](docs/CHANGELOG.md).
 
 For developers: [development notes](docs/DEVELOPMENT.md), [calibration tools](docs/CALIBRATION.md) and
 [contributing](.github/CONTRIBUTING.md).
@@ -274,15 +283,15 @@ Tests:
 ```
 
 Build the installer: install 64-bit [Python 3.13](https://www.python.org/downloads/) (the version the
-pinned packages were made with; `build.bat` refuses any other) and
-[Inno Setup 6](https://jrsoftware.org/isdl.php), then run `build.bat`. It makes a clean build
+pinned packages were made with; the build refuses any other) and
+[Inno Setup 6](https://jrsoftware.org/isdl.php), then run `installer\build.bat`. It makes a clean build
 environment with the pinned versions in `installer/constraints.txt`, regenerates
-`THIRD-PARTY-NOTICES.txt`, bundles the app with PyInstaller (`installer/OpenShaker.spec`) and compiles
+`installer/THIRD-PARTY-NOTICES.txt`, bundles the app with PyInstaller (`installer/OpenShaker.spec`) and compiles
 `installer/OpenShaker.iss` into `dist\OpenShaker-Setup-<version>.exe`.
 
 More: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) (how the code fits together) and
 [docs/CALIBRATION.md](docs/CALIBRATION.md) (recording, fitting and tuning tools; they need
-`requirements-dev.txt`).
+`docs/requirements-dev.txt`).
 
 ## Disclaimer and license
 
@@ -296,4 +305,4 @@ or support OpenShaker.
 
 Released under the MIT License - see [LICENSE](LICENSE). The installed program also contains
 open-source components under their own licences, listed with their full texts in
-[THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt).
+[THIRD-PARTY-NOTICES.txt](installer/THIRD-PARTY-NOTICES.txt).

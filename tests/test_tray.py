@@ -180,7 +180,7 @@ class TrayMenuTests(unittest.TestCase):
         self.app = FakeApp()
         real_icon, tray.pystray.Icon = tray.pystray.Icon, FakeIcon
         self.addCleanup(setattr, tray.pystray, "Icon", real_icon)
-        self.tray = tray.Tray(self.app, Path(__file__).resolve().parent.parent / "openshaker.ico")
+        self.tray = tray.Tray(self.app, Path(__file__).resolve().parent.parent / "openshaker" / "openshaker.ico")
         self.assertTrue(self.tray.active, f"the tray icon could not be built: {getattr(self.tray, 'error', '')}")
 
     def items(self):

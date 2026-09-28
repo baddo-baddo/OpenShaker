@@ -35,7 +35,7 @@ function Find-Python {
     }
     throw ("Release builds need 64-bit Python $ReleasePython, the version the pinned packages in " +
         "installer\constraints.txt were tested with (numpy 2.5.3 needs 3.12 or newer), and it was not found. " +
-        "Install Python $ReleasePython from https://www.python.org/downloads/ and run build.bat again. " +
+        "Install Python $ReleasePython from https://www.python.org/downloads/ and run installer\build.bat again. " +
         "Running from source works with Python 3.10 or newer.")
 }
 
@@ -93,7 +93,7 @@ foreach ($line in (& $py -m pip freeze --all --disable-pip-version-check)) {
 }
 
 Write-Host "== Third-party notices"
-Invoke-Checked $py @((Join-Path $Root "installer\third_party_notices.py"), "--out", (Join-Path $Root "THIRD-PARTY-NOTICES.txt"))
+Invoke-Checked $py @((Join-Path $Root "installer\third_party_notices.py"), "--out", (Join-Path $Root "installer\THIRD-PARTY-NOTICES.txt"))
 
 # A Windows venv has no Tcl/Tk of its own, so PyInstaller would decide tkinter is broken and leave it
 # out of the bundle (the window then cannot open). Point it at the base Python's copy.
@@ -110,7 +110,7 @@ Invoke-Checked $py @("-m", "PyInstaller", "--noconfirm", "--clean", "--log-level
     "--distpath", $dist, "--workpath", (Join-Path $BuildDir "work"), (Join-Path $Root "installer\OpenShaker.spec"))
 $app = Join-Path $dist "OpenShaker"
 # _ssl and OpenSSL: the update check's HTTPS request needs them (openshaker/updater.py)
-foreach ($part in "_internal\_tcl_data", "_internal\_tk_data", "_internal\profiles", "_internal\openshaker.ico",
+foreach ($part in "_internal\_tcl_data", "_internal\_tk_data", "_internal\profiles", "_internal\openshaker\openshaker.ico",
                   "_internal\_ssl.pyd", "_internal\libssl-3.dll", "_internal\libcrypto-3.dll") {
     if (-not (Test-Path (Join-Path $app $part))) { throw "The build is missing $part." }
 }

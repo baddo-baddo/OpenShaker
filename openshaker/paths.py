@@ -28,6 +28,7 @@ def resource_dir() -> Path:
 
 
 RESOURCE_DIR = resource_dir()
+ICON = RESOURCE_DIR / "openshaker" / "openshaker.ico"     # window, tray, a source copy's Start menu entry
 
 
 def user_dir(create: bool = True) -> Path:

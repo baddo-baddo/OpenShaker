@@ -9,7 +9,7 @@ packages on top of the app's. They write sessions to `sessions/` and learned pro
 `profiles/` inside the checkout:
 
 ```bash
-python -m pip install -r requirements-dev.txt
+python -m pip install -r docs/requirements-dev.txt
 ```
 
 ## How the shipped profiles were made

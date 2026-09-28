@@ -1,4 +1,4 @@
-; OpenShaker installer (Inno Setup 6). build.bat compiles it with /DAppVersion=... /DBuildDir=...
+; OpenShaker installer (Inno Setup 6). installer\build.bat compiles it with /DAppVersion=... /DBuildDir=...
 ; Per-user install: no administrator prompt, installs to %LOCALAPPDATA%\Programs\OpenShaker.
 
 #define AppName "OpenShaker"
@@ -6,7 +6,7 @@
 #define AppId "6F1E2C3B-8A47-4C5E-9D2B-3E7A1F0C5B84"
 ; the version lives only in openshaker/__init__.py; build.ps1 passes it in
 #ifndef AppVersion
-  #error Build with build.bat, which passes /DAppVersion from openshaker/__init__.py
+  #error Build with installer\build.bat, which passes /DAppVersion from openshaker/__init__.py
 #endif
 #ifndef BuildDir
   #define BuildDir "..\build\dist\OpenShaker"
@@ -31,7 +31,7 @@ DisableFinishedPage=yes
 PrivilegesRequired=lowest
 OutputDir=..\dist
 OutputBaseFilename={#AppName}-Setup-{#AppVersion}
-SetupIconFile=..\openshaker.ico
+SetupIconFile=..\openshaker\openshaker.ico
 UninstallDisplayIcon={app}\{#AppExe}
 UninstallDisplayName={#AppName}
 Compression=lzma2/max
@@ -57,7 +57,8 @@ Name: "desktopicon"; Description: "Create a &desktop shortcut"
 
 [Files]
 Source: "{#BuildDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "..\THIRD-PARTY-NOTICES.txt"; DestDir: "{app}"; Flags: ignoreversion
+; build.ps1 writes the notices next to this script; they are installed as {app}\THIRD-PARTY-NOTICES.txt
+Source: "THIRD-PARTY-NOTICES.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 
 [Icons]

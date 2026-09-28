@@ -34,7 +34,7 @@ class StartMenuTests(unittest.TestCase):
         self.assertEqual(Path(target), autostart.pythonw())
         self.assertEqual(args, f'"{autostart.LAUNCHER}"')
         self.assertEqual(Path(workdir), autostart.LAUNCHER.parent.parent)
-        self.assertTrue(icon.lower().startswith(str(paths.RESOURCE_DIR / "openshaker.ico").lower()))
+        self.assertTrue(icon.lower().startswith(str(paths.ICON).lower()))
         self.assertIsNone(autostart.ensure_start_menu_entry(self.folder), "made once, not on every start")
 
     def test_an_existing_entry_is_left_alone(self):
@@ -42,6 +42,14 @@ class StartMenuTests(unittest.TestCase):
         installed.write_bytes(b"an installed copy's shortcut")
         self.assertIsNone(autostart.ensure_start_menu_entry(self.folder))
         self.assertEqual(installed.read_bytes(), b"an installed copy's shortcut")
+
+    def test_its_own_entry_with_the_old_icon_place_gets_the_icon_back(self):
+        old = self.folder / "OpenShaker.lnk"
+        autostart.make_shortcut(old, autostart.pythonw(), f'"{autostart.LAUNCHER}"', icon=autostart.OLD_ICON)
+        self.assertFalse(autostart.OLD_ICON.exists(), "the icon has moved into the package")
+        self.assertEqual(autostart.ensure_start_menu_entry(self.folder), old, "made again once")
+        self.assertTrue(read_shortcut(old)[3].lower().startswith(str(paths.ICON).lower()))
+        self.assertIsNone(autostart.ensure_start_menu_entry(self.folder), "then left alone")
 
     def test_the_installed_app_leaves_it_to_the_installer(self):
         self.addCleanup(setattr, paths, "is_frozen", paths.is_frozen)

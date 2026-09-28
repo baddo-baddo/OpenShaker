@@ -151,6 +151,7 @@ def migrate_legacy() -> bool:
 
 # -- Start menu -----------------------------------------------------------------------------------------
 SHORTCUT_NAME = f"{APP_NAME}.lnk"             # the same name the installer gives the installed copy's entry
+OLD_ICON = paths.RESOURCE_DIR / "openshaker.ico"  # where the icon was before it moved into the package
 _MAKE_SHORTCUT = ("$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:OS_LNK); "
                   "$s.TargetPath = $env:OS_TARGET; $s.Arguments = $env:OS_ARGS; "
                   "$s.WorkingDirectory = $env:OS_DIR; $s.IconLocation = $env:OS_ICON; "
@@ -183,18 +184,31 @@ def make_shortcut(lnk: Path, target: Path, arguments: str = "", workdir: Path | 
         raise OSError(f"the shortcut was not written: {lnk}")
 
 
+def _uses_old_icon(lnk: Path) -> bool:
+    """This checkout's own entry from before the icon moved into the package: its icon path (UTF-16 in
+    the .lnk) names a file that is gone. Read as bytes, so a normal start runs no PowerShell."""
+    if OLD_ICON.exists():
+        return False
+    try:
+        data = lnk.read_bytes()
+    except OSError:
+        return False
+    return str(OLD_ICON).encode("utf-16-le").lower() in data.lower()
+
+
 def ensure_start_menu_entry(folder: Path | None = None) -> Path | None:
     """From source: add the Start menu entry the installer gives an installed copy. Returns what it
     wrote, or None. An entry that is already there - an installed OpenShaker's, or one made on an
-    earlier start - is left alone, so a source copy never takes over an installed one's entry.
+    earlier start - is left alone, so a source copy never takes over an installed one's entry. The one
+    exception is this checkout's own entry that still points at the icon's old place: it is made again.
     """
     if paths.is_frozen():
         return None                              # the installer owns the installed copy's entry
     lnk = Path(folder or programs_folder()) / SHORTCUT_NAME
-    if lnk.exists():
+    if lnk.exists() and not _uses_old_icon(lnk):
         return None
     make_shortcut(lnk, pythonw(), f'"{LAUNCHER}"', workdir=LAUNCHER.parent.parent,
-                  icon=paths.RESOURCE_DIR / "openshaker.ico",
+                  icon=paths.ICON,
                   description=f"{APP_NAME} - game haptics for bass shakers (run from source)")
     return lnk
 

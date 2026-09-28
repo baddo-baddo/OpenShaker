@@ -1,4 +1,4 @@
-# PyInstaller spec for OpenShaker: a one-folder, windowed build (no console). build.bat runs it.
+# PyInstaller spec for OpenShaker: a one-folder, windowed build (no console). installer\build.bat runs it.
 # Only what the app needs at run time is bundled: the recording and calibration tools and the packages only
 # they use (matplotlib, scipy, soundcard) stay out. Python's ssl (OpenSSL) is in, for the update check's
 # HTTPS request to GitHub (openshaker/updater.py).
@@ -11,7 +11,8 @@ DEV_ONLY = ("analyze", "beamng_check", "calibrate", "compare", "fit", "optimize"
 # optional local packages (openshaker/outputs.py): never in the installer (build.ps1 checks the result too)
 PRIVATE = ("openshaker.wheel",)
 
-datas = [(str(ROOT / "openshaker.ico"), ".")]      # LICENSE and the notices go next to the exe (installer)
+# the icon keeps its place in the package (paths.ICON); LICENSE and the notices go next to the exe (installer)
+datas = [(str(ROOT / "openshaker" / "openshaker.ico"), "openshaker")]
 for name in RUNTIME_PROFILES:
     datas.append((str(ROOT / "profiles" / name / "profile.json"), f"profiles/{name}"))
 
@@ -47,7 +48,7 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name="OpenShaker",
-    icon=str(ROOT / "openshaker.ico"),
+    icon=str(ROOT / "openshaker" / "openshaker.ico"),
     console=False,
     upx=False,
 )

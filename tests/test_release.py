@@ -80,10 +80,10 @@ class PortabilityTests(unittest.TestCase):
     def test_code_is_not_tied_to_this_pc(self):
         """No user folder, user name or e-mail address of whoever runs the tests may appear in the
         published files. The needles come from this PC's environment, so none is written down here."""
-        files = (list((ROOT / "openshaker").rglob("*.py")) + [ROOT / "openshaker" / "app.pyw", ROOT / "build.bat"]
+        files = (list((ROOT / "openshaker").rglob("*.py")) + [ROOT / "openshaker" / "app.pyw", ROOT / "installer" / "build.bat"]
                  + list((ROOT / "installer").glob("*.p*")) + [ROOT / "installer" / "OpenShaker.iss"]
                  + list((ROOT / "tests").glob("*.py")) + list((ROOT / "docs").glob("*.md"))
-                 + [ROOT / "README.md", ROOT / "requirements.txt", ROOT / "requirements-dev.txt"])
+                 + [ROOT / "README.md", ROOT / "requirements.txt", ROOT / "docs" / "requirements-dev.txt"])
         needles = set()
         for var in ("USERPROFILE", "OneDrive", "HOME"):
             value = os.environ.get(var, "").strip().lower()

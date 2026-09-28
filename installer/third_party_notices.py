@@ -3,7 +3,7 @@ licence and project page, followed by the full licence texts.
 
 Run it with the build environment's Python (build.ps1 does) so the versions are the bundled ones:
 
-    python installer/third_party_notices.py [--out THIRD-PARTY-NOTICES.txt]
+    python installer/third_party_notices.py [--out installer/THIRD-PARTY-NOTICES.txt]
 """
 from __future__ import annotations
 
@@ -103,7 +103,7 @@ def tcl_tk(base: Path) -> tuple[str, list[str], Path | None]:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--out", default=str(ROOT / "THIRD-PARTY-NOTICES.txt"))
+    ap.add_argument("--out", default=str(ROOT / "installer" / "THIRD-PARTY-NOTICES.txt"))
     args = ap.parse_args(argv)
     base = Path(getattr(sys, "base_prefix", sys.prefix))
     py_version = ".".join(str(v) for v in sys.version_info[:3])

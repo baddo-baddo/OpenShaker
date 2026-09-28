@@ -90,9 +90,9 @@ class ShippedNoticesTests(unittest.TestCase):
         version = release_python()
         self.assertTrue((INSTALLER / f"cpython-{version}-incorporated-licenses.txt").is_file())
         self.assertIn(f"Tested with Python {version}", (ROOT / "requirements.txt").read_text(encoding="utf-8"))
-        self.assertIn(f"Python {version}", (ROOT / "build.bat").read_text(encoding="utf-8"))
+        self.assertIn(f"Python {version}", (ROOT / "installer" / "build.bat").read_text(encoding="utf-8"))
         self.assertIn(f"Python {version}", (ROOT / "README.md").read_text(encoding="utf-8"))
-        text = (ROOT / "THIRD-PARTY-NOTICES.txt").read_text(encoding="utf-8")
+        text = (ROOT / "installer" / "THIRD-PARTY-NOTICES.txt").read_text(encoding="utf-8")
         self.assertIn(f"* Python {version}.", text)
         self.assertIn(f"python{version.replace('.', '')}.dll", text)
 
@@ -101,7 +101,7 @@ class ShippedNoticesTests(unittest.TestCase):
         for part in ("Mersenne Twister", "SipHash24", "strtod and dtoa", "expat", "zlib", "libmpdec", "mimalloc",
                      "libffi", "asyncio", "Global Unbounded Sequences (GUS)"):
             self.assertRegex(vendored, rf"\n{re.escape(part)}\n-+\n", part)
-        text = (ROOT / "THIRD-PARTY-NOTICES.txt").read_text(encoding="utf-8")
+        text = (ROOT / "installer" / "THIRD-PARTY-NOTICES.txt").read_text(encoding="utf-8")
         self.assertIn(vendored.strip(), text)
         hacl = (INSTALLER / "hacl-star-LICENSE.txt").read_text(encoding="utf-8")
         self.assertIn("MIT License", hacl)
@@ -110,7 +110,7 @@ class ShippedNoticesTests(unittest.TestCase):
         self.assertIn(f"\nHACL* (in {dll}: hashlib MD5/SHA-1/SHA-2/SHA-3) - MIT\n", text)
 
     def test_no_two_licence_texts_have_the_same_heading(self):
-        text = (ROOT / "THIRD-PARTY-NOTICES.txt").read_text(encoding="utf-8")
+        text = (ROOT / "installer" / "THIRD-PARTY-NOTICES.txt").read_text(encoding="utf-8")
         headings = re.findall(r"\n-{78}\n(.+?)\n-{78}\n", text)
         self.assertGreater(len(headings), 20)
         self.assertEqual(len(headings), len(set(headings)), [h for h in headings if headings.count(h) > 1])
