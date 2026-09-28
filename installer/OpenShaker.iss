@@ -51,8 +51,10 @@ RestartApplications=no
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Messages]
-; the Tasks page is the only page, and its button installs straight away (Inno would label it Next)
+; the Tasks page is the only page, and its button installs straight away (Inno would label it Next, and
+; its text above the boxes would say "then click Next")
 ButtonNext=&Install
+SelectTasksLabel2=Select the additional tasks you would like Setup to perform while installing [name], then click Install.
 
 [Tasks]
 ; both ticked: this page is the only question setup asks, and ticking is the user's consent to each

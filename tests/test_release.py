@@ -485,6 +485,8 @@ class PackagingTests(unittest.TestCase):
             self.assertIn(f"Disable{page}Page=yes", iss)
         self.assertIn("\n[Messages]\n", iss.replace("\r\n", "\n"))
         self.assertIn("\nButtonNext=&Install\n", iss.replace("\r\n", "\n"), "the one page's button says Install")
+        self.assertIn("\nSelectTasksLabel2=Select the additional tasks you would like Setup to perform while installing "
+                      "[name], then click Install.\n", iss.replace("\r\n", "\n"), "and the text above it agrees")
         tasks = re.search(r"^\[Tasks\]\n(.*?)\n\n", iss.replace("\r\n", "\n"), re.S | re.M).group(1)
         task_lines = [line for line in tasks.splitlines() if line.startswith("Name:")]
         self.assertEqual([re.search(r'Name: "(\w+)"', line).group(1) for line in task_lines], ["startup", "desktopicon"])
