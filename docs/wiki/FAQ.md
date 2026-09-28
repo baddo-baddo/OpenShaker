@@ -25,6 +25,12 @@ Yes: tick it in that game's preset. It then warns as the tyres' slip nears the l
 **OpenShaker picked the wrong Forza Horizon preset.**
 OpenShaker tells Horizon 5 and 6 apart by the program running on this PC. If the game runs on an Xbox or another PC, OpenShaker keeps the Horizon preset that was active, or uses Horizon 5. Both presets play the same tuning; only your own strengths differ.
 
+**How is OpenShaker different from SimHub?**
+[SimHub](https://www.simhubdash.com/) can drive bass shakers too, with its ShakeIt module, for the other games OpenShaker supports, and it does much more: dashboards, motion rigs, wind and LEDs. OpenShaker does one thing: it feels like HaptiConnect straight away, with presets tuned against HaptiConnect's own output, so there is nothing to set up. It also supports Trackmania (2020), which [SimHub's list of supported games](https://www.simhubdash.com/supported-games/) doesn't include (it lists Trackmania 2 and Trackmania Turbo; checked in September 2026). If SimHub already works for you, keep using it.
+
+**Will it work with my shaker?**
+Probably: to Windows a bass shaker is just a sound output, so any shaker your PC can play sound to should work, although only the ButtKicker PRO has been tested. Pick it by name, check the channel, and set your amplifier with Test tone; see [Shakers, amplifiers and channels](Shakers-Amplifiers-and-Channels.md).
+
 **Does OpenShaker phone home?**
 Only to ask GitHub, once a day, whether a newer version exists. That request carries nothing but the app's name and version; your game data, settings and hardware are never sent anywhere. Nothing is downloaded until you click **Update now**. Switch the check off under **Advanced... > Check for updates** and OpenShaker never contacts the internet. See [Updating](Start-With-Windows-Updates-and-Uninstalling.md#updating).
 

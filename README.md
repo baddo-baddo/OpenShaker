@@ -181,12 +181,42 @@ Tested during development in September 2026.
 
 ## Should also work (untested)
 
+OpenShaker isn't tied to one device: to Windows, a bass shaker is just a sound output, so any shaker
+your PC can play sound to should work. Only the ButtKicker PRO has been tested so far.
+
 - Other ButtKicker models through their amplifiers: Gamer Plus, Gamer PRO, LFE, Advance.
 - Other bass shakers on any amplifier, such as the Dayton Audio BST-1 or TT25 and the AuraSound AST-2B-4.
 - Any Windows audio output that feeds a shaker amplifier: line or headphone out, USB, optical or HDMI.
 - Windows 10.
 - Assetto Corsa and Assetto Corsa Competizione (basic effects, using the Assetto Corsa EVO preset).
 - Forza Horizon 4 (sends the same data as Forza Horizon 5).
+
+On a different shaker or amplifier:
+
+- Pick your shaker **by name** under **Output > Device**, not the Windows default, so an unplugged
+  shaker never sends the effects to your speakers.
+- OpenShaker plays on the **left channel** only, like HaptiConnect. For a shaker on the right side of
+  an amplifier, pick **Right** under **Advanced... > Output channel**. For two shakers on one stereo
+  amplifier, pick **Both**: they get the same signal.
+- The levels were calibrated on a ButtKicker PRO, so **start with the amplifier turned down**. Press
+  **Test tone** (about as strong as the hardest hits in a game) and turn up until it feels firm but
+  never clatters. Normal driving is quieter than that.
+- OpenShaker shares the output with other apps; it never locks them out.
+
+More in [Shakers, amplifiers and channels](docs/wiki/Shakers-Amplifiers-and-Channels.md). If you try
+it on another shaker or amplifier, please
+**[tell us how it feels](https://github.com/baddo-baddo/OpenShaker/issues/new/choose)**: those reports
+are how the tested list grows.
+
+## What about SimHub?
+
+[SimHub](https://www.simhubdash.com/) can drive bass shakers too, with its ShakeIt module, for the
+other games here, and it does much more: dashboards, motion rigs, wind and LEDs. OpenShaker is a small
+program that does one thing: it feels like HaptiConnect straight away, with presets tuned against
+HaptiConnect's own output, so there is nothing to set up. It also supports Trackmania (2020), which
+[SimHub's list of supported games](https://www.simhubdash.com/supported-games/) doesn't include (it
+lists Trackmania 2 and Trackmania Turbo; checked in September 2026). If SimHub already works for you,
+keep using it.
 
 ## Troubleshooting
 
