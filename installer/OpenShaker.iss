@@ -50,6 +50,10 @@ RestartApplications=no
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
+[Messages]
+; the Tasks page is the only page, and its button installs straight away (Inno would label it Next)
+ButtonNext=&Install
+
 [Tasks]
 ; both ticked: this page is the only question setup asks, and ticking is the user's consent to each
 Name: "startup"; Description: "Start {#AppName} with &Windows (it waits in the notification area)"

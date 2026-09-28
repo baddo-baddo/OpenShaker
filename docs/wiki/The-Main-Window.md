@@ -10,9 +10,9 @@ The window is titled **OpenShaker** and its version, for example **OpenShaker 1.
 
 ## Update bar
 
-![The update bar at the top of the window: "OpenShaker 1.0.2 is available (you have 1.0.1)." with the buttons Update now, What's new and Skip this version (an example)](../images/update_bar.png)
+![The update bar at the top of the window: "OpenShaker 1.0.3 is available (you have 1.0.2)." with the buttons Update now, What's new and Skip this version, and under it the one-time question "Install updates automatically when no game is running?" with Yes and No (an example)](../images/update_bar.png)
 
-Only when a newer version is available: a yellow bar across the top says "OpenShaker X.Y.Z is available", with **Update now**, **What's new** and **Skip this version**. While an update downloads and installs, the bar says what it is doing, or why it did not work. See [Updating](Start-With-Windows-Updates-and-Uninstalling.md#updating).
+Only when a newer version is available: a yellow bar across the top says "OpenShaker X.Y.Z is available", with **Update now**, **What's new** and **Skip this version**. The first time, a second line asks once whether to install updates automatically ([Automatic updates](Start-With-Windows-Updates-and-Uninstalling.md#automatic-updates)). While an update downloads and installs, the bar says what it is doing, or why it did not work; after an automatic update it says so. See [Updating](Start-With-Windows-Updates-and-Uninstalling.md#updating).
 
 ## Haptics on
 

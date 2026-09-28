@@ -32,7 +32,7 @@ OpenShaker tells Horizon 5 and 6 apart by the program running on this PC. If the
 Probably: to Windows a bass shaker is just a sound output, so any shaker your PC can play sound to should work, although only the ButtKicker PRO has been tested. Pick it by name, check the channel, and set your amplifier with Test tone; see [Shakers, amplifiers and channels](Shakers-Amplifiers-and-Channels.md).
 
 **Does OpenShaker phone home?**
-Only to ask GitHub, once a day, whether a newer version exists. That request carries nothing but the app's name and version; your game data, settings and hardware are never sent anywhere. Nothing is downloaded until you click **Update now**. Switch the check off under **Advanced... > Check for updates** and OpenShaker never contacts the internet. See [Updating](Start-With-Windows-Updates-and-Uninstalling.md#updating).
+Only to ask GitHub, once a day, whether a newer version exists. That request carries nothing but the app's name and version; your game data, settings and hardware are never sent anywhere. Nothing is downloaded until you click **Update now**, unless you switched on [automatic updates](Start-With-Windows-Updates-and-Uninstalling.md#automatic-updates). Switch the check off under **Advanced... > Check for updates** and OpenShaker never contacts the internet. See [Updating](Start-With-Windows-Updates-and-Uninstalling.md#updating).
 
 **Something is missing or not working.**
 [Troubleshooting](Troubleshooting.md) lists symptoms and messages with their cause and fix, for example

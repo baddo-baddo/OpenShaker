@@ -8,7 +8,7 @@ How to download and install OpenShaker, what the installer does, and the first t
 
 1. Download **OpenShaker-Setup-&lt;version&gt;.exe** from the [latest release](https://github.com/baddo-baddo/OpenShaker/releases/latest). If your browser says the file isn't commonly downloaded, choose **Keep** (in Edge: **...** > **Keep** > **Show more** > **Keep anyway**).
 2. Double-click it. The installer is not code-signed, so Windows may show **"Windows protected your PC"**: click **More info**, then **Run anyway**.
-3. Click **Next**. That is the only screen, and it installs straight away.
+3. Click **Install**. That is the only screen.
 
 ## What the installer does
 

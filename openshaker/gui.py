@@ -16,7 +16,7 @@ import webbrowser
 from pathlib import Path
 from tkinter import messagebox, ttk
 
-from . import APP_NAME, FEEDBACK_URL, REPO_URL, __version__, config, paths, updater
+from . import APP_NAME, FEEDBACK_URL, REPO_URL, __version__, config, paths, procs, updater
 from .audio import CHANNEL_CHOICES, AudioOutput, DeviceNotFound, channel_choice
 from .effects import REGISTRY
 from .engine import TestTone
@@ -33,6 +33,11 @@ WRAP_MIN = 520                # px: the status and source lines wrap here at the
 UPDATE_BG = "#fff4ce"         # the update bar's soft yellow
 UPDATE_CONFIRM = "Haptics will stop for about 15 seconds while OpenShaker updates. Update now?"
 INSTALLER_WAIT_S = 180.0      # an update installer that has not closed the app by then did not work
+AUTO_IDLE_S = 300.0           # automatic updates (off by default) wait until no game has sent data this long
+AUTO_TICK_S = 30.0            # ... and look again this often while one does
+# parts of the supported games' executable names: one of them running means "not now" (leans towards waiting)
+GAME_EXES = ("forza", "assettocorsa", "acevo", "ac2-win64", "acs.exe", "beamng", "trackmania")
+AUTO_QUESTION = "Install updates automatically when no game is running?"
 HAPTICS_OFF_MSG = ("Haptics are switched off: nothing plays, and the game ports are free for other programs. "
                    "Tick Haptics on (here or in the tray menu) to turn them back on.")
 EFFECT_LABELS = {
@@ -262,6 +267,11 @@ class App:
         self._update_version = ""
         self._update_state = ""                  # "", "busy" or "failed": the tray's item reads it
         self._update_sticky = False              # the bar says an update stopped partway: a check keeps it
+        self._auto_job = None                    # a waiting automatic update's next look (_auto_tick)
+        self._auto_update = False                # the update under way was started automatically
+        self._auto_failed = ""                   # an automatic update to this version failed: the bar takes over
+        self._notes_version = ""                 # "updated itself to X": What's new opens X's release page
+        self._tele_seen_at = time.monotonic()    # the last telemetry from any game (the launch counts as one)
         self._update_busy = False
         self._update_job = None
         self._update_retries = 0                 # network failures in a row (sooner retries)
@@ -299,21 +309,32 @@ class App:
         style.configure("Head.TLabel", font=("Segoe UI", 10, "bold"))
         style.configure("Update.TFrame", background=UPDATE_BG)
         style.configure("Update.TLabel", background=UPDATE_BG, font=("Segoe UI", 10, "bold"))
+        style.configure("UpdateAsk.TLabel", background=UPDATE_BG, font=("Segoe UI", 10))
 
         outer = ttk.Frame(root, padding=12)
         outer.pack(fill="both", expand=True)
 
         # -- the update bar: packed above everything only while an update is available ------------
         self.update_bar = ttk.Frame(outer, style="Update.TFrame", padding=(8, 4))
+        line = ttk.Frame(self.update_bar, style="Update.TFrame")
+        line.pack(fill="x")
         self.update_var = tk.StringVar(value="")
-        ttk.Label(self.update_bar, textvariable=self.update_var, style="Update.TLabel",
+        ttk.Label(line, textvariable=self.update_var, style="Update.TLabel",
                   wraplength=WRAP_MIN - 220).pack(side="left")
         self.update_buttons = {}
         for key, text, command in (("skip", "Skip this version", self.skip_update),
                                    ("news", "What's new", self.open_whats_new),
                                    ("now", "Update now", self.update_now)):
-            self.update_buttons[key] = ttk.Button(self.update_bar, text=text, command=command)
+            self.update_buttons[key] = ttk.Button(line, text=text, command=command)
             self.update_buttons[key].pack(side="right", padx=(6, 0))
+        # asked once, the first time an update is offered (updates.auto_asked); never a pop-up
+        self.update_ask = ttk.Frame(self.update_bar, style="Update.TFrame")
+        ttk.Label(self.update_ask, text=AUTO_QUESTION, style="UpdateAsk.TLabel").pack(side="left")
+        self.update_ask_buttons = {}
+        for key, text, answer in (("no", "No", False), ("yes", "Yes", True)):
+            self.update_ask_buttons[key] = ttk.Button(self.update_ask, text=text,
+                                                      command=lambda a=answer: self.answer_auto_update(a))
+            self.update_ask_buttons[key].pack(side="right", padx=(6, 0))
 
         # -- top: the haptics switch / mode ------------------------------------------------
         top = ttk.Frame(outer)
@@ -468,6 +489,7 @@ class App:
             threading.Thread(target=updater.clean_old_downloads, name="update-cleanup", daemon=True).start()
         if update_result:                         # setup started this copy again after a stopped update
             self._installer_came_back(*update_result)
+        self._after_automatic_update(bool(update_result))
         if hidden and self.tray is not None and self.tray.active:
             root.withdraw()                       # started by Windows: live in the tray only
         elif hidden:
@@ -704,7 +726,8 @@ class App:
             return
         self.update_release, self._update_sticky = release, False
         self._update_version, self._update_state = release.version, ""
-        self._show_update(f"{APP_NAME} {release.version} is available (you have {__version__}).")
+        self._show_update(f"{APP_NAME} {release.version} is available (you have {__version__}).", ask=True)
+        self._arm_auto()
 
     def _installer_came_back(self, how: str, version: str) -> None:
         """Setup quit this app for a silent update, stopped, and started this copy again: with
@@ -724,27 +747,36 @@ class App:
             self._show_update(f"The update to {target} did not install, so {APP_NAME} {__version__} was "
                               f"started again. It will be offered again.", buttons=False)
 
-    def _show_update(self, text: str, buttons: bool | tuple = True) -> None:
-        """buttons: True = all three while a release is offered, False = none, a tuple = just those."""
+    def _show_update(self, text: str, buttons: bool | tuple = True, ask: bool = False) -> None:
+        """buttons: True = all three while a release is offered, False = none, a tuple = just those.
+        ask: an offer, where the one-time automatic-updates question may show under it."""
         self.update_var.set(text + (" [update test mode]" if updater.test_mode() else ""))
         for name, button in self.update_buttons.items():
             on = name in buttons if isinstance(buttons, tuple) else buttons and self.update_release is not None
             button.state(["!disabled"] if on else ["disabled"])
+        if ask and self._should_ask_auto():
+            if not self.update_ask.winfo_manager():
+                self.update_ask.pack(fill="x", pady=(4, 0))
+        else:
+            self.update_ask.pack_forget()
         if not self.update_bar.winfo_manager():
             self.update_bar.pack(fill="x", pady=(0, 10), before=self._top_frame)
         self._refresh_tray(force=True)            # the badge and the menu items
 
     def _hide_update(self) -> None:
         self.update_release, self._update_version, self._update_state = None, "", ""
-        self._update_sticky = False
+        self._update_sticky, self._notes_version = False, ""
+        self._cancel_auto()
+        self.update_ask.pack_forget()
         self.update_bar.pack_forget()
         self._refresh_tray(force=True)
 
     def open_whats_new(self) -> None:
+        version = self._update_version or self._notes_version
         if self.update_release is not None:
             url = self.update_release.page_url
-        elif updater.parse_version(self._update_version):       # after a stopped update: that release
-            url = f"{REPO_URL}/releases/tag/v{self._update_version}"
+        elif updater.parse_version(version):      # after a stopped or an automatic update: that release
+            url = f"{REPO_URL}/releases/tag/v{version}"
         else:
             url = f"{REPO_URL}/releases"
         try:
@@ -759,7 +791,7 @@ class App:
         if self.update_release is None or self._update_busy:
             return
         self.cfg.setdefault("updates", {})["skip"] = self.update_release.version
-        self._save_now()
+        self._mark_auto_asked()                   # an answer too: the question never comes back
         self._hide_update()
 
     def update_from_tray(self) -> None:
@@ -772,26 +804,36 @@ class App:
         tele = (self._last_status or {}).get("tele")
         return tele is not None and bool(getattr(tele, "active", True))
 
-    def update_now(self, from_window: bool = True) -> None:
+    def update_now(self, from_window: bool = True, auto: bool = False) -> None:
         """Download, verify and run the new installer (installed copies only). The installer closes this
-        app and starts it again - with its window when the click came from the window."""
+        app and starts it again - with its window when the click came from the window. `auto`: started
+        by _auto_tick once no game is running; it asks nothing and always comes back in the tray."""
         release = self.update_release
         if release is None or self._update_busy:
             return
         if not updater.is_installed_copy():
+            if auto:
+                return
             self.open_whats_new()                 # a source copy: the release page instead
             self._show_update(f"This copy runs from source, so it cannot update itself: get "
                               f"{APP_NAME} {release.version} from the release page.")
             return
         self._update_busy = True                  # before asking: a second click cannot start a second update
-        if self._game_sending():
+        if not auto and self._game_sending():
             self.show_window()                    # never a question hidden behind a full-screen game
             if not messagebox.askyesno(f"Update {APP_NAME}", UPDATE_CONFIRM, parent=self.root) \
                     or self.update_release is not release:
                 self._update_busy = False
                 return
+        self._cancel_auto()
+        self._auto_update = auto
+        if auto:
+            from_window = False                   # an update nobody clicked never brings a window up
+        else:
+            self._mark_auto_asked()               # installing it counts as an answer to the question
         self._update_state = "busy"
-        self._show_update(f"Downloading {APP_NAME} {release.version} ...", buttons=False)
+        self._show_update(f"Downloading {APP_NAME} {release.version}{' to install it automatically' if auto else ''} ...",
+                          buttons=False)
         threading.Thread(target=self._update_download_worker, args=(release, from_window), name="update",
                          daemon=True).start()
 
@@ -811,13 +853,22 @@ class App:
     def _update_withdrawn(self, release, fresh=None) -> None:
         """GitHub no longer offers the version clicked (pulled, or replaced): install nothing, and offer
         what it offers now - unless that is nothing, or a skipped version."""
-        self._update_busy = False
+        self._update_busy, self._auto_update = False, False
         self._hide_update()
         self._offer_update(fresh)
         self.msg_var.set(f"{APP_NAME} {release.version} is no longer offered, so nothing was installed.")
 
     def _install_update(self, release, verified, show_window: bool) -> None:
         self.update_release, self._update_version = release, release.version
+        if self._auto_update:
+            if not self._game_idle():             # a game started during the download: wait again
+                updater.discard(verified.path)
+                self._update_busy, self._auto_update = False, False
+                self._offer_update(release)
+                return
+            updater.log(f"installing {release.version} automatically (no game running)")
+            self.cfg.setdefault("updates", {})["auto_done"] = release.version   # the new version says so once
+            self._save_now()
         try:
             process = updater.run_installer(verified, show_window)
         except Exception as exc:
@@ -850,9 +901,98 @@ class App:
     def _update_failed(self, error: str) -> None:
         self._update_busy, self._update_state = False, "failed"
         release = self.update_release
-        updater.log(f"update to {release.version if release else '?'} failed: {error}")
-        self._show_update(f"Update to {release.version if release else 'the new version'} failed: {error}. "
+        auto, self._auto_update = self._auto_update, False
+        if auto:
+            self._auto_failed = release.version if release else ""    # the bar takes over for this version
+        upd = self.cfg.get("updates") or {}
+        if upd.get("auto_done"):
+            upd.pop("auto_done")
+            self._save_now()
+        updater.log(f"{'automatic ' if auto else ''}update to {release.version if release else '?'} failed: {error}")
+        self._show_update(f"{'Automatic update' if auto else 'Update'} to "
+                          f"{release.version if release else 'the new version'} failed: {error}. "
                           f"Nothing was installed; Update now tries again.")
+
+    # -- automatic updates (updates.auto, off by default) ---------------------------------------
+    def updates_auto(self) -> bool:
+        return self.updates_enabled() and (self.cfg.get("updates") or {}).get("auto") is True
+
+    def _should_ask_auto(self) -> bool:
+        """The one-time question: never asked yet, automatic updates off, and an installed copy."""
+        upd = self.cfg.get("updates") or {}
+        return not upd.get("auto_asked") and upd.get("auto") is not True and updater.is_installed_copy()
+
+    def answer_auto_update(self, yes: bool) -> None:
+        """The update bar's Yes / No. Either answer is final: the question never comes back."""
+        upd = self.cfg.setdefault("updates", {})
+        upd["auto"], upd["auto_asked"] = bool(yes), True
+        self._save_now()
+        self.update_ask.pack_forget()
+        if yes:
+            self.msg_var.set("Updates now install by themselves once no game is running "
+                             "(Advanced... > Install updates automatically).")
+            self._arm_auto()
+        else:
+            self.msg_var.set("Updates stay manual: Update now installs them "
+                             "(Advanced... > Install updates automatically).")
+
+    def _mark_auto_asked(self) -> None:
+        upd = self.cfg.setdefault("updates", {})
+        if not upd.get("auto_asked"):
+            upd["auto_asked"] = True
+            self._save_now()
+        self.update_ask.pack_forget()
+
+    def _game_idle(self) -> bool:
+        """Safe to install by itself: no game has sent data for AUTO_IDLE_S (the data Update now's question
+        looks at), and no supported game runs on this PC."""
+        if self._game_sending() or time.monotonic() - self._tele_seen_at < AUTO_IDLE_S:
+            return False
+        try:
+            return not any(procs.is_running(exe) for exe in GAME_EXES)
+        except Exception:
+            return False
+
+    def _arm_auto(self, delay_s: float = AUTO_TICK_S) -> None:
+        """An update is on offer and automatic updates are on: look for a quiet moment (_auto_tick)."""
+        release = self.update_release
+        if (self._auto_job is not None or release is None or self._update_busy or not self.updates_auto()
+                or self._auto_failed == release.version or not updater.is_installed_copy()):
+            return
+        self._auto_job = self.root.after(int(delay_s * 1000), self._auto_tick)
+
+    def _cancel_auto(self) -> None:
+        if self._auto_job is not None:
+            try:
+                self.root.after_cancel(self._auto_job)
+            except tk.TclError:
+                pass
+            self._auto_job = None
+
+    def _auto_tick(self) -> None:
+        self._auto_job = None
+        release = self.update_release
+        if (release is None or self._update_busy or not self.updates_auto() or self._skipped(release.version)
+                or self._auto_failed == release.version):
+            return
+        if not self._game_idle():
+            self._arm_auto()                      # a game, or its data lately: look again later
+            return
+        self.update_now(auto=True)
+
+    def _after_automatic_update(self, came_back: bool) -> None:
+        """At start: an automatic update installed this version (updates.auto_done), so the bar says so
+        until an update is offered; any other value (the update did not happen) is just cleared."""
+        upd = self.cfg.get("updates") or {}
+        done = upd.get("auto_done")
+        if not done:
+            return
+        upd.pop("auto_done")
+        self._save_quietly()
+        if done == __version__ and not came_back:
+            updater.log(f"now running {__version__}, installed automatically")
+            self._notes_version, self._update_sticky = done, True
+            self._show_update(f"{APP_NAME} updated itself to {__version__}.", buttons=("news",))
 
     # -- output device ----------------------------------------------------------------------
     def _device_label(self, name: str) -> str:
@@ -999,6 +1139,7 @@ class App:
         ("Forza listen address (0.0.0.0 also takes an Xbox or another PC)", ("sources", "forza", "host"), str),
         ("Output channel", ("audio", "channels"), "channel"),
         ("Check for updates (asks GitHub once a day)", ("updates", "check"), bool),
+        ("Install updates automatically (when no game is running)", ("updates", "auto"), bool),
     ]
 
     def _cfg_at(self, path: tuple):
@@ -1061,9 +1202,18 @@ class App:
 
     def _apply_advanced(self, values: list) -> None:
         """Advanced OK, after its fields were checked: [((node, key), value), ...]."""
+        auto_before = (self.cfg.get("updates") or {}).get("auto") is True
         for (node, key), value in values:
             node[key] = value
+        upd = self.cfg.setdefault("updates", {})
+        if (upd.get("auto") is True) != auto_before:
+            upd["auto_asked"] = True              # chosen here: the update bar never asks
+            self.update_ask.pack_forget()
         self._save_now()
+        if self.updates_auto():
+            self._arm_auto()
+        else:
+            self._cancel_auto()
         if not self.updates_enabled():
             self._schedule_update_check(0)            # off: cancels the next check; nothing asks GitHub
             if self.update_release is not None and not self._update_busy:
@@ -1218,6 +1368,8 @@ class App:
                 self.status_var.set(state)
             return
         st = self._last_status = self.rt.status()
+        if st.get("tele") is not None:                # any game's data, paused or not: not the time to update
+            self._tele_seen_at = time.monotonic()
         dev = f"{st['device']} @ {st['sr']} Hz, {st['latency_ms']:.0f} ms"
         extra = f", {st['xruns']} dropouts" if st["xruns"] else ""
         prof = Path(st["profile"]).parent.name if st.get("profile") else "defaults"

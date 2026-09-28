@@ -38,7 +38,7 @@ While the window is hidden, OpenShaker uses tray notifications to tell you about
 - the Haptics on switch not being saved;
 - the first time you close the window (see [Closing the window](The-Main-Window.md#closing-the-window)).
 
-An available update never shows a notification: only the badge, the two menu items and the window's bar.
+An available update never shows a notification: only the badge, the two menu items and the window's bar. An [automatic update](Start-With-Windows-Updates-and-Uninstalling.md#automatic-updates) shows **Updating to X.Y.Z...** while it runs, and OpenShaker comes back in the tray.
 
 ---
 

@@ -483,6 +483,8 @@ class PackagingTests(unittest.TestCase):
         # with both boxes ticked and an Install button, then setup closes and starts the app
         for page in ("Welcome", "Dir", "ProgramGroup", "Ready", "Finished"):
             self.assertIn(f"Disable{page}Page=yes", iss)
+        self.assertIn("\n[Messages]\n", iss.replace("\r\n", "\n"))
+        self.assertIn("\nButtonNext=&Install\n", iss.replace("\r\n", "\n"), "the one page's button says Install")
         tasks = re.search(r"^\[Tasks\]\n(.*?)\n\n", iss.replace("\r\n", "\n"), re.S | re.M).group(1)
         task_lines = [line for line in tasks.splitlines() if line.startswith("Name:")]
         self.assertEqual([re.search(r'Name: "(\w+)"', line).group(1) for line in task_lines], ["startup", "desktopicon"])

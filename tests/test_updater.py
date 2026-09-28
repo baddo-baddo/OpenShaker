@@ -23,12 +23,13 @@ PAYLOAD = b"MZ fake installer " * 1000
 SHA = hashlib.sha256(PAYLOAD).hexdigest()
 NAME = "OpenShaker-Setup-1.0.2.exe"
 AT = "@"                        # user-info URLs are spelled with this, so the file holds no e-mail-like text
+REAL_DOWNLOAD = updater.download  # the window tests fake it; one of them needs the real refusal
 
 
 def api_answer(tag="v1.0.2", **over):
     v = tag.lstrip("v")
     data = {"tag_name": tag, "draft": False, "prerelease": False, "html_url": f"{REPO_URL}/releases/tag/{tag}",
-            "assets": [{"name": f"OpenShaker-Setup-{v}.exe", "size": len(PAYLOAD),
+            "assets": [{"name": f"OpenShaker-Setup-{v}.exe", "size": len(PAYLOAD), "digest": f"sha256:{SHA}",
                         "browser_download_url": f"{REPO_URL}/releases/download/{tag}/OpenShaker-Setup-{v}.exe"},
                        {"name": f"OpenShaker-Setup-{v}.exe.sha256", "size": 100,
                         "browser_download_url": f"{REPO_URL}/releases/download/{tag}/OpenShaker-Setup-{v}.exe.sha256"}]}
@@ -220,7 +221,6 @@ class ReleaseTests(unittest.TestCase):
         cases = {
             "not a dict": ["x"],
             "no assets list": api_answer(assets=5),
-            "no checksum": api_answer(assets=api_answer()["assets"][:1]),
             "twice": api_answer(assets=api_answer()["assets"] + api_answer()["assets"][:1]),
             "other repo": with_assets(lambda a: dict(a, browser_download_url=a["browser_download_url"].replace(
                 "baddo-baddo/OpenShaker", "someone/else"))),
@@ -253,6 +253,24 @@ class ReleaseTests(unittest.TestCase):
             with self.subTest(name), self.assertRaises(updater.UpdateError):
                 updater.release_from(data, current="1.0.1")
 
+    def test_the_sha256_is_githubs_digest_of_the_installer(self):
+        self.assertEqual(updater.release_from(api_answer(), current="1.0.1").sha256, SHA)
+        no_file = api_answer(assets=api_answer()["assets"][:1])
+        self.assertEqual(updater.release_from(no_file, current="1.0.1").sha256, SHA, "no .sha256 file needed")
+        upper = with_assets(lambda a: dict(a, digest="sha256:" + SHA.upper()) if a["name"] == NAME else a)
+        self.assertEqual(updater.release_from(upper, current="1.0.1").sha256, SHA, "upper-case hex: the same hash")
+        bad = {"missing": None, "not text": 5, "another algorithm": "sha512:" + SHA, "upper-case prefix": "SHA256:" + SHA,
+               "short": "sha256:" + SHA[:-1], "long": "sha256:" + SHA + "0", "not hex": "sha256:" + "g" * 64,
+               "bare hash": SHA, "padded": " sha256:" + SHA, "empty": ""}
+        for name, digest in bad.items():
+            with self.subTest(name):
+                def change(a, d=digest):
+                    if a["name"] != NAME:
+                        return a
+                    return {k: v for k, v in a.items() if k != "digest"} if d is None else dict(a, digest=d)
+                r = updater.release_from(with_assets(change), current="1.0.1")
+                self.assertEqual((r.version, r.sha256), ("1.0.2", ""), "still offered; download() refuses it")
+
     def test_a_foreign_release_page_falls_back_to_ours(self):
         r = updater.release_from(api_answer(html_url="https://evil.example/notes"), current="1.0.1")
         self.assertEqual(r.page_url, f"{REPO_URL}/releases/tag/v1.0.2")
@@ -270,29 +288,6 @@ class ReleaseTests(unittest.TestCase):
                 updater.check("1.0.1", fetch=lambda *_a, r=raw: r)
 
 
-class ChecksumTests(unittest.TestCase):
-    def good(self, raw):
-        self.assertEqual(updater.expected_sha256(raw, NAME), SHA)
-
-    def test_the_line_that_names_the_installer_in_any_common_encoding(self):
-        line = f"{SHA}  {NAME}\n"
-        self.good(line.encode("ascii"))
-        self.good(f"{SHA.upper()} *{NAME}\r\n".encode())                       # binary marker, CRLF
-        self.good(("\ufeff" + line).encode("utf-8"))                            # UTF-8 with a BOM
-        self.good(line.encode("utf-16"))                                        # UTF-16 LE with a BOM
-        self.good(("\ufeff" + line).encode("utf-16-be"))                        # UTF-16 BE with a BOM
-        self.good(f"{SHA}  dist\\{NAME}\n".encode())                            # with a folder in front
-        self.good(f"{'0' * 64}  other.exe\n{SHA}  {NAME}\n".encode())          # its own line, not the first
-
-    def test_anything_else_is_refused(self):
-        for raw in (f"{SHA}\n".encode(),                                        # a bare hash names nothing
-                    f"{SHA}  other.exe\n".encode(), b"not a hash", b"",
-                    f"{SHA}  {NAME}\n{'0' * 64}  {NAME}\n".encode(),            # two different hashes
-                    f"{SHA[:-1]}  {NAME}\n".encode()):
-            with self.subTest(raw[:20]), self.assertRaises(updater.UpdateError):
-                updater.expected_sha256(raw, NAME)
-
-
 class DownloadTests(unittest.TestCase):
     def setUp(self):
         env(self, OPENSHAKER_UPDATE_TEST=None)
@@ -300,47 +295,56 @@ class DownloadTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.temp, True)
         self.release = updater.release_from(api_answer(), current="1.0.1")
 
-    def fetchers(self, payload=PAYLOAD, sha_text=None, sha_error=None):
-        def fetch(url, limit):
-            if sha_error:
-                raise sha_error
-            self.assertTrue(url.endswith(".sha256"))
-            return (sha_text if sha_text is not None else f"{SHA}  {NAME}\n").encode()
-
+    def fetcher(self, payload=PAYLOAD, error=None):
         def fetch_file(url, dest, limit):
+            if error:
+                raise error
+            self.assertEqual(url, self.release.installer.url, "the installer only: there is no .sha256 to fetch")
             Path(dest).write_bytes(payload)
             return len(payload), hashlib.sha256(payload).hexdigest()
-        return fetch, fetch_file
+        return fetch_file
 
     def leftovers(self):
         return list(self.temp.glob(updater.TEMP_PREFIX + "*"))
 
     def test_a_verified_download(self):
-        fetch, fetch_file = self.fetchers()
-        v = updater.download(self.release, self.temp, fetch, fetch_file)
+        v = updater.download(self.release, self.temp, self.fetcher())
         self.assertEqual((v.path.read_bytes(), v.size, v.sha256), (PAYLOAD, len(PAYLOAD), SHA))
         self.assertTrue(v.path.parent.name.startswith(updater.TEMP_PREFIX))
         self.assertEqual(v.path.parent.parent, self.temp)
 
     def test_every_mismatch_aborts_and_deletes(self):
         cases = {
-            "size": self.fetchers(payload=PAYLOAD + b"x"),
-            "hash": self.fetchers(payload=PAYLOAD[:-1] + b"?"),
-            "bad .sha256": self.fetchers(sha_text="not a hash"),
-            ".sha256 of another file": self.fetchers(sha_text=f"{SHA}  something-else.exe"),
-            "bare hash": self.fetchers(sha_text=SHA),
-            "network": self.fetchers(sha_error=OSError("timed out")),
+            "size": self.fetcher(payload=PAYLOAD + b"x"),
+            "hash": self.fetcher(payload=PAYLOAD[:-1] + b"?"),
+            "network": self.fetcher(error=OSError("timed out")),
         }
-        for name, (fetch, fetch_file) in cases.items():
+        for name, fetch_file in cases.items():
             with self.subTest(name):
                 with self.assertRaises(updater.UpdateError):
-                    updater.download(self.release, self.temp, fetch, fetch_file)
+                    updater.download(self.release, self.temp, fetch_file)
                 self.assertEqual(self.leftovers(), [], "nothing is left behind")
+
+    def test_a_digest_that_does_not_match_the_file_aborts_and_deletes(self):
+        other = updater.Release("1.0.2", REPO_URL, self.release.installer, "0" * 64)
+        with self.assertRaises(updater.UpdateError) as ctx:
+            updater.download(other, self.temp, self.fetcher())
+        self.assertIn("does not match its SHA-256", str(ctx.exception))
+        self.assertEqual(self.leftovers(), [])
+
+    def test_without_a_usable_digest_nothing_is_downloaded(self):
+        release = updater.Release("1.0.2", REPO_URL, self.release.installer, "")
+        fetched = []
+        with self.assertRaises(updater.UpdateError) as ctx:
+            updater.download(release, self.temp, lambda *a: fetched.append(a))
+        self.assertIn("GitHub lists no SHA-256", str(ctx.exception))
+        self.assertIn("release page", str(ctx.exception))
+        self.assertEqual((fetched, self.leftovers()), ([], []))
 
     def test_a_wrong_host_aborts_and_deletes(self):
         env(self, OPENSHAKER_OFFLINE=None)                  # the real fetchers: the host check stops them
-        bad = updater.Asset(NAME + ".sha256", 100, "https://evil.example/x.sha256")
-        release = updater.Release("1.0.2", REPO_URL, self.release.installer, bad)
+        bad = updater.Asset(NAME, len(PAYLOAD), "https://evil.example/" + NAME)
+        release = updater.Release("1.0.2", REPO_URL, bad, SHA)
         with self.assertRaises(updater.UpdateError):
             updater.download(release, self.temp)
         self.assertEqual(self.leftovers(), [])
@@ -426,7 +430,7 @@ class FakeProcess:
 
 @unittest.skipUnless(tray.AVAILABLE, f"pystray/Pillow not installed ({tray.IMPORT_ERROR})")
 class WindowTests(unittest.TestCase):
-    """The badge and the bar, Skip, Update now, failures; never a notification."""
+    """The badge and the bar, Skip, Update now, failures, automatic updates; never a notification."""
 
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp())
@@ -440,6 +444,8 @@ class WindowTests(unittest.TestCase):
         from test_tray import FakeIcon
         patch(self, tray.pystray, "Icon", FakeIcon)
         self.asked, self.downloads, self.installs, self.opened, self.questions = [], [], [], [], []
+        self.games = set()                                  # the running executables procs.py reports
+        patch(self, gui.procs, "running", lambda force=False: frozenset(self.games))
         patch(self, updater, "check", self.fake_check)
         patch(self, updater, "download", self.fake_download)
         patch(self, updater, "run_installer", self.fake_run)
@@ -566,7 +572,8 @@ class WindowTests(unittest.TestCase):
         app = self.app()
         self.checked(app)
         app.skip_update()
-        self.assertEqual(json.loads(self.path.read_text(encoding="utf-8"))["updates"], {"skip": "1.0.2"})
+        self.assertEqual(json.loads(self.path.read_text(encoding="utf-8"))["updates"],
+                         {"skip": "1.0.2", "auto_asked": True}, "skipping answers the automatic-updates question too")
         self.assertEqual((app.update_version(), app.update_bar.winfo_manager()), ("", ""))
         self.checked(app)
         self.assertEqual(app.update_version(), "", "the skipped version stays hidden")
@@ -687,6 +694,21 @@ class WindowTests(unittest.TestCase):
         self.wait_for(app, "update")
         self.assertEqual(self.downloads, ["1.0.2"])
 
+    def test_a_release_without_a_usable_digest_points_to_the_release_page(self):
+        patch(self, updater, "download", REAL_DOWNLOAD)     # the real refusal, before any network
+        self.answer = updater.release_from(with_assets(
+            lambda a: {k: v for k, v in a.items() if k != "digest"}), current="1.0.1")
+        app = self.app()
+        self.checked(app)
+        self.assertIn("1.0.2 is available", app.update_var.get(), "still offered")
+        app.update_now()
+        self.wait_for(app, "update")
+        self.assertEqual(self.installs, [])
+        self.assertIn("GitHub lists no SHA-256 for OpenShaker-Setup-1.0.2.exe", app.update_var.get())
+        self.assertIn("release page (What's new)", app.update_var.get())
+        self.assertTrue(app.update_buttons["news"].instate(["!disabled"]), "the manual way stays one click away")
+        self.assertEqual(list(self.dir.glob(updater.TEMP_PREFIX + "*")), [])
+
     def test_a_source_copy_opens_the_release_page_and_never_runs_the_installer(self):
         patch(self, updater, "is_installed_copy", lambda: False)
         app = self.app()
@@ -735,6 +757,189 @@ class WindowTests(unittest.TestCase):
         self.answer = updater.release_from(api_answer(), current="1.0.1")
         self.checked(app)
         self.assertIn("1.0.2 is available", app.update_var.get(), "Update now installs it again, which repairs it")
+
+    # -- automatic updates (updates.auto) ------------------------------------------------------
+    def saved(self):
+        return json.loads(self.path.read_text(encoding="utf-8")).get("updates", {})
+
+    def asking(self, app):
+        return app.update_ask.winfo_manager() == "pack"
+
+    def auto_app(self, **updates):
+        self.path.write_text(json.dumps({"updates": {"auto": True, "auto_asked": True, **updates}}), encoding="utf-8")
+        return self.app()
+
+    def quiet_tick(self, app):
+        """A look for a quiet moment (_auto_tick), with no game data for longer than AUTO_IDLE_S."""
+        app._tele_seen_at = time.monotonic() - gui.AUTO_IDLE_S - 1
+        app._cancel_auto()
+        app._auto_tick()
+
+    def test_automatic_updates_are_off_by_default_even_in_an_old_config(self):
+        for name, saved in (("new", {}), ("from 1.0.1", {"updates": {"skip": "1.0.2"}}),
+                            ("hand-edited", {"updates": {"auto": "yes", "auto_asked": 1, "auto_done": 5}})):
+            with self.subTest(name):
+                self.path.write_text(json.dumps(saved), encoding="utf-8")
+                upd = config.load(str(self.path))["updates"]
+                self.assertEqual((upd["auto"], upd["auto_asked"], upd["auto_done"]), (False, False, ""))
+        app = self.app()
+        self.checked(app)
+        self.assertFalse(app.updates_auto())
+        self.assertIsNone(app._auto_job, "nothing waits to install by itself")
+
+    def test_the_bar_asks_once_and_yes_turns_automatic_updates_on(self):
+        app = self.app()
+        self.assertFalse(self.asking(app), "no question before an update is found")
+        self.checked(app)
+        self.assertTrue(self.asking(app))
+        self.assertEqual(app.tray.icon.notified, [], "a line in the bar, never a pop-up")
+        app.answer_auto_update(True)
+        self.assertEqual((self.saved()["auto"], self.saved()["auto_asked"]), (True, True))
+        self.assertFalse(self.asking(app))
+        self.assertIsNotNone(app._auto_job, "this update now waits for a quiet moment")
+        self.answer = updater.release_from(api_answer("v1.0.3"), current="1.0.1")
+        self.checked(app)
+        self.assertFalse(self.asking(app), "asked once only")
+
+    def test_no_leaves_them_off_and_the_question_never_returns(self):
+        app = self.app()
+        self.checked(app)
+        app.answer_auto_update(False)
+        self.assertEqual(self.saved(), {"auto_asked": True})
+        self.assertFalse(self.asking(app))
+        self.assertIsNone(app._auto_job)
+        app = self.app()                                  # a later start, a later update
+        self.checked(app)
+        self.assertFalse(self.asking(app))
+        self.assertIn("1.0.2 is available", app.update_var.get())
+
+    def test_installing_or_skipping_counts_as_an_answer(self):
+        for action in ("update_now", "skip_update"):
+            with self.subTest(action):
+                self.path.write_text("{}", encoding="utf-8")
+                app = self.app()
+                self.checked(app)
+                self.assertTrue(self.asking(app))
+                getattr(app, action)()
+                self.wait_for(app, "update")
+                self.assertFalse(self.asking(app))
+                self.assertIs(self.saved()["auto_asked"], True)
+                self.assertFalse(app.updates_auto(), "and automatic updates stay off")
+
+    def test_the_advanced_switch_counts_as_the_answer(self):
+        self.assertIn(("Install updates automatically (when no game is running)", ("updates", "auto"), bool),
+                      gui.App.ADVANCED_FIELDS)
+        app = self.app()
+        self.checked(app)
+        app._apply_advanced([((app.cfg["updates"], "auto"), True)])
+        self.assertFalse(self.asking(app))
+        self.assertEqual((self.saved()["auto"], self.saved()["auto_asked"]), (True, True))
+        self.assertIsNotNone(app._auto_job)
+        app._apply_advanced([((app.cfg["updates"], "auto"), False)])
+        self.assertIsNone(app._auto_job, "switched off: nothing waits")
+
+    def test_an_automatic_update_waits_for_no_game_then_installs_in_the_tray(self):
+        app = self.auto_app()
+        self.checked(app)
+        self.assertFalse(self.asking(app))
+        self.assertIsNotNone(app._auto_job)
+        self.games = {"forzahorizon5.exe"}
+        self.quiet_tick(app)
+        self.assertEqual(self.downloads, [], "a game is running")
+        self.assertIsNotNone(app._auto_job, "it looks again later")
+        self.games = set()
+        app._tele_seen_at = time.monotonic()              # a game sent data a moment ago
+        app._cancel_auto()
+        app._auto_tick()
+        self.assertEqual(self.downloads, [], "game data lately")
+        self.game_running(app)                            # game data right now
+        self.quiet_tick(app)
+        self.assertEqual(self.downloads, [], "game data now")
+        app._last_status = None
+        self.quiet_tick(app)
+        self.wait_for(app, "update")
+        self.assertEqual(self.downloads, ["1.0.2"])
+        self.assertEqual(self.installs, [(self.dir / NAME, False)], "back in the tray, never a window")
+        self.assertEqual(self.questions, [], "nothing asked")
+        self.assertEqual(self.saved()["auto_done"], "1.0.2", "the new version will say so")
+        self.assertIn("installing 1.0.2 automatically", (self.dir / "logs" / updater.LOG_NAME).read_text(encoding="utf-8"))
+        self.assertEqual(app.tray.icon.notified, [])
+
+    def test_a_game_starting_during_the_download_puts_it_back_to_waiting(self):
+        app = self.auto_app()
+        self.checked(app)
+        self.quiet_tick(app)                              # the download starts
+        self.games = {"trackmania.exe"}                   # ... and a game starts before it is installed
+        self.wait_for(app, "update")
+        self.assertEqual((self.downloads, self.installs), (["1.0.2"], []))
+        self.assertFalse(app._update_busy)
+        self.assertIn("1.0.2 is available", app.update_var.get())
+        self.assertIsNotNone(app._auto_job, "waits for the next quiet moment")
+        self.assertNotIn("auto_done", self.saved())
+
+    def test_an_automatic_update_that_fails_leaves_it_to_the_bar(self):
+        for field, text in (("download_error", "the download does not match its SHA-256"),
+                            ("install_error", "the downloaded installer changed after it was checked")):
+            with self.subTest(field):
+                setattr(self, field, text)
+                app = self.auto_app()
+                self.checked(app)
+                self.quiet_tick(app)
+                self.wait_for(app, "update")
+                self.assertEqual(self.installs, [])
+                self.assertIn(f"Automatic update to 1.0.2 failed: {text}", app.update_var.get())
+                self.assertIn("Update now tries again", app.update_var.get())
+                self.assertNotIn("auto_done", self.saved())
+                self.assertIsNone(app._auto_job, "no automatic retry of this version")
+                self.checked(app)                         # the daily check offers it again: by hand only
+                self.assertIsNone(app._auto_job)
+                self.assertIn("automatic update to 1.0.2 failed",
+                              (self.dir / "logs" / updater.LOG_NAME).read_text(encoding="utf-8"))
+                setattr(self, field, None)
+                app.update_now()                          # Update now still works
+                self.wait_for(app, "update")
+                self.assertEqual(len(self.installs), 1)
+                self.installs.clear()
+
+    def test_a_skipped_version_is_never_installed_automatically(self):
+        app = self.auto_app(skip="1.0.2")
+        self.checked(app)
+        self.assertEqual((app.update_version(), app._auto_job), ("", None))
+        app.update_release = self.answer                  # even if it were on offer somehow
+        self.quiet_tick(app)
+        self.assertEqual(self.downloads, [])
+
+    def test_a_source_copy_is_never_asked_and_never_updates_itself(self):
+        patch(self, updater, "is_installed_copy", lambda: False)
+        app = self.app()
+        self.checked(app)
+        self.assertFalse(self.asking(app))
+        app = self.auto_app()
+        self.checked(app)
+        self.assertIsNone(app._auto_job)
+        self.quiet_tick(app)
+        self.assertEqual(self.downloads, [])
+
+    def test_after_an_automatic_update_the_bar_says_so_until_an_update_is_offered(self):
+        app = self.auto_app(auto_done=gui.__version__)
+        self.assertIn(f"updated itself to {gui.__version__}", app.update_var.get())
+        self.assertEqual({name: button.instate(["!disabled"]) for name, button in app.update_buttons.items()},
+                         {"skip": False, "news": True, "now": False})
+        self.assertEqual(app.update_version(), "", "no tray item for it")
+        app.open_whats_new()
+        self.assertEqual(self.opened, [f"{REPO_URL}/releases/tag/v{gui.__version__}"])
+        self.assertNotIn("auto_done", self.saved(), "said once")
+        self.answer = None
+        self.checked(app)
+        self.assertIn("updated itself", app.update_var.get(), "a check with nothing newer keeps it")
+        self.assertEqual(self.app().update_bar.winfo_manager(), "", "the next start says nothing")
+        for name, done, kw in (("another version", "9.9.9", {}),
+                               ("the installer came back", gui.__version__, {"update_result": ("failed", "9.9.9")})):
+            with self.subTest(name):
+                app = self.auto_app(auto_done=done)
+                app = self.app(**kw) if kw else app
+                self.assertNotIn("updated itself", app.update_var.get())
+                self.assertNotIn("auto_done", self.saved())
 
     def test_test_mode_is_visible(self):
         env(self, OPENSHAKER_UPDATE_TEST="1")

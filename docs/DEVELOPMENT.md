@@ -313,11 +313,16 @@ that every name in `OPTIONAL_PACKAGES` is in both guards.
     with urllib: a 15 s timeout per connect and read and 60 s in total, User-Agent
     `OpenShaker/<version>`, no auth, nothing else sent.
   - `release_from()` returns None for drafts, pre-releases, non-`X.Y.Z` tags and anything not newer
-    than `__version__`. A newer release must have exactly one `OpenShaker-Setup-X.Y.Z.exe` and one
-    `.exe.sha256` asset, each at exactly `REPO_URL/releases/download/<tag>/<name>` (owner and repository
-    compared case-insensitively, as GitHub treats them; the tag and the name exactly), with an integer
-    size. Otherwise it raises `UpdateError` with the reason. Malformed JSON of any shape is an
-    `UpdateError` too.
+    than `__version__`. A newer release must have exactly one `OpenShaker-Setup-X.Y.Z.exe` asset, at
+    exactly `REPO_URL/releases/download/<tag>/<name>` (owner and repository compared
+    case-insensitively, as GitHub treats them; the tag and the name exactly), with an integer size.
+    Otherwise it raises `UpdateError` with the reason. Malformed JSON of any shape is an
+    `UpdateError` too. Other assets are ignored.
+  - The installer's SHA-256 is the asset's `digest` in the same API answer (GitHub computes it for
+    every release asset), which must match `sha256:<64 hex>` (hex of either case; stored lower-case in
+    `Release.sha256`). Without a usable digest the release is still offered, with `sha256 = ""`, and
+    `download()` refuses it before fetching anything; the bar then points to the release page. Since
+    1.0.2 there is no `.sha256` file to fetch or parse.
   - The next check follows the answer: 24 h after a success or an answer from GitHub (a 403 or 429
     included). After a `NetworkError` (no connection, a timeout, a broken transfer) it comes after 10
     min, 1 h and 4 h (`RETRY_AFTER_S`), then daily.
@@ -342,15 +347,14 @@ that every name in `OPTIONAL_PACKAGES` is in both guards.
   3. The worker calls `check()` again. If that is None, another version or a skipped one, it installs
      nothing: `_update_withdrawn` hides the bar and offers what the answer offers, if anything.
      Otherwise it calls `updater.download()`.
-     That fetches the `.sha256` and the installer into a new `%TEMP%\OpenShaker-update-*` folder
+     That fetches the installer (only) into a new `%TEMP%\OpenShaker-update-*` folder
      within `max(120 s, size / 50 kB/s)`. `_read` uses `read1()`, which returns after one receive, so
      a server trickling bytes cannot hold a 64 KiB `read()` (and the deadline check) open.
      - `url_allowed()` accepts only HTTPS on GitHub's hosts, as the exact authority: no user info and
        no other port. That is checked on every redirect and on the final URL.
-  4. The size must equal the API's. The SHA-256 must equal the one on the `.sha256` line that names
-     the installer (`<hash>  <name>` or `<hash> *<name>`, UTF-8 with or without a BOM, UTF-16 with a
-     BOM, CRLF or LF). A bare hash is refused. Otherwise the folder is deleted (`updater.discard`,
-     which only ever deletes an `OpenShaker-update-*` folder in `%TEMP%`) and the bar shows why.
+  4. The size must equal the API's, and the SHA-256, hashed while downloading, must equal the
+     asset's `digest`. Otherwise the folder is deleted (`updater.discard`, which only ever deletes an
+     `OpenShaker-update-*` folder in `%TEMP%`) and the bar shows why.
   5. `updater.run_installer()` hashes the file again, then starts it with `Popen([exe, /VERYSILENT,
      /SUPPRESSMSGBOXES, /NORESTART (, /SHOWWINDOW=1)], shell=False)`, detached. It refuses anything
      outside an update folder, and any copy that is not installed.
@@ -379,15 +383,37 @@ that every name in `OPTIONAL_PACKAGES` is in both guards.
        `ssPostInstall`, an unticked box deletes that entry. A first install ticks both.
   7. Old `OpenShaker-update-*` folders are removed at every start, once more than an hour old, whatever
      the setting. It is local only, and skipped under `OPENSHAKER_OFFLINE`.
-- **Release assets:** build.ps1 writes `dist\OpenShaker-Setup-<ver>.exe.sha256` next to the installer
-  (ASCII, `<lowercase hash>  <name>`, LF). A release needs both files, or no copy is offered it
-  (`update.log` then says which is missing).
+- **Automatic updates** (1.0.2; `updates.auto`, default off, also for existing configs):
+  - **The question:** `App._show_update(..., ask=True)` (offers only) packs `App.update_ask` under the
+    bar while `_should_ask_auto()`: `updates.auto_asked` false, auto off, installed copy.
+    `answer_auto_update(yes)` sets `auto` and `auto_asked`. Update now (`_mark_auto_asked`), Skip and
+    changing the Advanced switch (`_apply_advanced`) set `auto_asked` too. No dialog, no notify().
+  - **Waiting:** `_offer_update` calls `_arm_auto()`, which schedules `_auto_tick` every `AUTO_TICK_S`
+    (30 s) while auto is on, the version is not skipped and no automatic attempt at it failed.
+    `_game_idle()` needs `_game_sending()` false, no telemetry for `AUTO_IDLE_S` (300 s;
+    `_tele_seen_at` is set by `_refresh` whenever the status has telemetry, and starts at launch),
+    and no `GAME_EXES` substring among `procs.running()`.
+  - **Installing:** `update_now(auto=True)` skips the source-copy page and the game question, and forces
+    `from_window=False` (it comes back `--hidden`). The worker is Update now's own: fresh `check()`,
+    `download()`, then `_install_update`, which checks `_game_idle()` once more and, if a game started,
+    discards the file and re-offers. Before `run_installer` it logs and saves
+    `updates.auto_done = <version>`.
+  - **After it:** `_after_automatic_update` at start clears `auto_done`. If it names this version (and
+    setup did not bring back the old one), a sticky bar note "updated itself" appears with What's new
+    (`_notes_version`).
+  - **Failure:** `_update_failed` records `_auto_failed = <version>` (no automatic retry of it this
+    session), clears `auto_done` and shows the normal failure text prefixed "Automatic".
+- **Release assets:** from 1.0.2 the updater needs only `OpenShaker-Setup-<ver>.exe`, and GitHub's own
+  digest of it. build.ps1 still writes `dist\OpenShaker-Setup-<ver>.exe.sha256` next to the installer
+  (ASCII, `<lowercase hash>  <name>`, LF), for checking by hand; it is not uploaded. 1.0.1's updater
+  wanted that file as a second asset, so a 1.0.1 copy is not offered a release without it and updates
+  by hand (its `update.log` says the file is missing). 1.0.1 had no users who needed it.
 - **No network in tests:** `tests/fakes.py` sets `OPENSHAKER_OFFLINE=1`, and the one network function
   (`updater._open`) then refuses. A user can set the same variable. `tests/test_updater.py` covers the
   rest with fakes:
   - versions, addresses and redirects;
   - malformed JSON;
-  - `.sha256` encodings;
+  - asset digests (missing, malformed, another algorithm, upper case, mismatch);
   - every download mismatch and the deadline;
   - installer arguments and the re-hash;
   - the window side (withdrawn releases, retries, the busy guard, the installer watch, test mode).
@@ -497,13 +523,14 @@ that every name in `OPTIONAL_PACKAGES` is in both guards.
      Steinberg's ASIO SDK and load only with `SD_ENABLE_ASIO`).
 5. Finds `ISCC.exe` (PATH, the Inno Setup uninstall registry keys, then the per-user and Program Files
    folders) and compiles `installer/OpenShaker.iss` into `dist\OpenShaker-Setup-<version>.exe`, then
-   writes its `.sha256` next to it (the release's second asset, see [Updates](#updates)). The
+   writes its `.sha256` next to it (for checking by hand; the updater uses GitHub's digest, see
+   [Updates](#updates)). The
    version comes only from `openshaker/__init__.py`; the .iss refuses to compile without it.
 
 The installer is per-user (`PrivilegesRequired=lowest`, `{autopf}` = `%LOCALAPPDATA%\Programs`) and
-has one screen: the Tasks page - Start with Windows and a desktop shortcut, both ticked - whose Next
-button installs straight away (no Welcome, folder, group, Ready or Finished page; the button keeps Inno's
-"Next" label - a `[Messages] ButtonNext=&Install` override would rename it). It adds a Start-menu shortcut, installs LICENSE (as LICENSE.txt) and
+has one screen: the Tasks page - Start with Windows and a desktop shortcut, both ticked - whose button
+installs straight away (no Welcome, folder, group, Ready or Finished page; `[Messages] ButtonNext=&Install`
+labels it Install since 1.0.2, where Inno would say Next). It adds a Start-menu shortcut, installs LICENSE (as LICENSE.txt) and
 THIRD-PARTY-NOTICES.txt next to the exe - one copy of each - then starts the app and closes. A silent
 `/SILENT` or `/VERYSILENT` update puts back the app it stopped (only when the `OpenShakerRunning`
 mutex was held before it quit that copy): in the tray (`--hidden`), or with its window when setup ran

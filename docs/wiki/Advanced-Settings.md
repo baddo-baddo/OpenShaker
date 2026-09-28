@@ -6,7 +6,7 @@ The Advanced dialog, the settings kept only in the settings file, where settings
 
 ## The Advanced dialog
 
-![The Advanced settings dialog with its default values: the game ports, ACE poll rate and suspension scale, the Forza listen address and the output channel](../images/advanced.png)
+![The Advanced settings dialog with its default values: the game ports, ACE poll rate and suspension scale, the Forza listen address, the output channel, Check for updates ticked and Install updates automatically unticked](../images/advanced.png)
 
 **Advanced...** opens a small dialog of settings most people never need to change. **OK** saves them and restarts the haptics if they are on. **Cancel** discards them. If you type something that isn't a number, a "Not a number: ..." box appears and nothing is saved.
 
@@ -21,6 +21,7 @@ The Advanced dialog, the settings kept only in the settings file, where settings
 | Forza listen address (0.0.0.0 also takes an Xbox or another PC) | 127.0.0.1 | 127.0.0.1 accepts Forza only from this PC. 0.0.0.0 also accepts it from an Xbox or another PC on your network. See [Playing from an Xbox or another PC](Setting-Up-Your-Games.md#playing-from-an-xbox-or-another-pc). Leaving it empty means 127.0.0.1. |
 | Output channel | Left | Which channel(s) of the output carry the signal: Left, Right or Both. Any other layout set by hand in the settings file shows as "Custom" and is kept. See [Shakers, amplifiers and channels](Shakers-Amplifiers-and-Channels.md). |
 | Check for updates (asks GitHub once a day) | On | Ticked, OpenShaker asks GitHub about 30 s after it starts and then once a day whether a newer version exists. Unticked, it never contacts the internet. See [Updating](Start-With-Windows-Updates-and-Uninstalling.md#updating). |
+| Install updates automatically (when no game is running) | Off | Ticked, a newer version is downloaded, checked and installed by itself once no game has run or sent data for 5 minutes, and OpenShaker comes back in the tray. Setting it here also answers the update bar's one-time question. See [Automatic updates](Start-With-Windows-Updates-and-Uninstalling.md#automatic-updates). |
 
 A few more settings exist only in the settings file. They are listed under [Settings and logs](#the-settings-file).
 

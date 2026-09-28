@@ -7,12 +7,13 @@ icon gets a "!" badge and the window a bar (gui.App). Nothing is downloaded unti
 Update now.
 
 Update now (an installed copy only; a source copy opens the Releases page instead):
-- asks GitHub again, then downloads exactly OpenShaker-Setup-<version>.exe and its .sha256 from that
-  release (the URLs must be REPO_URL/releases/download/<tag>/<name>), over HTTPS from GitHub's hosts
-  only (every redirect is checked), into a fresh folder under %TEMP%, within a total deadline;
-- checks the size against the API's and the SHA-256 against the line of the .sha256 file that names
-  the installer, and on any mismatch or error deletes what it downloaded - an unverified file is
-  never run, and the file is hashed once more right before it runs;
+- asks GitHub again, then downloads exactly OpenShaker-Setup-<version>.exe from that release (the URL
+  must be REPO_URL/releases/download/<tag>/<name>), over HTTPS from GitHub's hosts only (every redirect
+  is checked), into a fresh folder under %TEMP%, within a total deadline;
+- checks the size against the API's and the SHA-256 against the one GitHub lists for that asset in the
+  same API answer ("digest": "sha256:<hex>"; since 1.0.2 - no .sha256 file). A release without a usable
+  digest is refused before anything is downloaded. On any mismatch or error it deletes what it
+  downloaded - an unverified file is never run, and the file is hashed once more right before it runs;
 - starts the installer with an argument list (no shell): /VERYSILENT; the installer's own --quit /
   AppMutex / RelaunchAfterSilentUpdate close the app and bring it back (/SHOWWINDOW=1 brings the window
   back when the click came from it), and bring the old version back if the update fails.
@@ -45,10 +46,9 @@ CHECK_DELAY_S = 30.0
 CHECK_EVERY_S = 24 * 3600.0
 RETRY_AFTER_S = (600.0, 3600.0, 4 * 3600.0)   # after a network failure: 10 min, 1 h, 4 h, then daily
 TIMEOUT_S = 15.0                                # per connect and per read
-SMALL_DEADLINE_S = 60.0                         # the API answer and the .sha256, in total
+SMALL_DEADLINE_S = 60.0                         # the API answer, in total
 MIN_DOWNLOAD_S, MIN_RATE = 120.0, 50_000        # the installer: at least 2 min, or 50 kB/s
 MAX_API_BYTES = 1_000_000
-MAX_SHA_BYTES = 4096
 MAX_INSTALLER_BYTES = 200_000_000
 GITHUB_HOSTS = ("github.com", "api.github.com", "objects.githubusercontent.com",
                 "release-assets.githubusercontent.com", "github-releases.githubusercontent.com")
@@ -60,7 +60,7 @@ OLD_DOWNLOAD_S = 3600.0
 LOG_NAME, LOG_KEEP = "update.log", 50
 
 VERSION = re.compile(r"v?(\d+)\.(\d+)\.(\d+)")
-SHA256 = re.compile(r"[0-9a-fA-F]{64}")
+DIGEST = re.compile(r"sha256:([0-9a-fA-F]{64})")      # GitHub's "digest" of a release asset
 
 
 class UpdateError(Exception):
@@ -83,7 +83,7 @@ class Release:
     version: str                  # "1.0.2"
     page_url: str                 # the release page ("What's new")
     installer: Asset
-    checksum: Asset
+    sha256: str                   # GitHub's digest of the installer, lower-case hex; "" when it lists none usable
 
 
 @dataclass(frozen=True)
@@ -242,8 +242,10 @@ def _asset_url_ok(url: str, tag: str, name: str) -> bool:
 
 def release_from(data, current: str = __version__) -> Optional[Release]:
     """The newer release described by GitHub's API answer, or None when there is none (a draft, a
-    pre-release, a tag that is no X.Y.Z, or not newer). A newer release whose assets are missing or not
-    where they must be is an UpdateError, so the reason can be logged."""
+    pre-release, a tag that is no X.Y.Z, or not newer). A newer release whose installer is missing or not
+    where it must be is an UpdateError, so the reason can be logged. One whose installer has no usable
+    "digest" is still offered, with sha256 "": download() then refuses it, so the bar points to the
+    release page instead."""
     if not isinstance(data, dict):
         raise UpdateError("unexpected answer from GitHub")
     if data.get("draft") or data.get("prerelease"):
@@ -253,30 +255,31 @@ def release_from(data, current: str = __version__) -> Optional[Release]:
     if version is None or not is_newer(tag, current):
         return None
     text = ".".join(str(v) for v in version)
-    names = (f"OpenShaker-Setup-{text}.exe", f"OpenShaker-Setup-{text}.exe.sha256")
-    found: dict = {}
+    name = f"OpenShaker-Setup-{text}.exe"
+    installer, sha = None, ""
     assets = data.get("assets")
     if not isinstance(assets, list):
         raise UpdateError(f"release {tag} lists no assets")
-    for a in assets:
-        if not isinstance(a, dict) or not isinstance(a.get("name"), str) or a["name"] not in names:
+    for a in assets:                              # other assets (a .sha256, say) are ignored
+        if not isinstance(a, dict) or a.get("name") != name:
             continue
         size, url = a.get("size"), a.get("browser_download_url")
-        if a["name"] in found or not isinstance(size, int) or isinstance(size, bool) or not isinstance(url, str):
-            raise UpdateError(f"release {tag} has an odd or doubled {a['name']}")
-        found[a["name"]] = Asset(a["name"], size, url)
-    installer, checksum = found.get(names[0]), found.get(names[1])
-    if installer is None or checksum is None:
-        raise UpdateError(f"release {tag} has no {names[0] if installer is None else names[1]}")
+        if installer is not None or not isinstance(size, int) or isinstance(size, bool) or not isinstance(url, str):
+            raise UpdateError(f"release {tag} has an odd or doubled {name}")
+        installer = Asset(name, size, url)
+        digest = a.get("digest")
+        match = DIGEST.fullmatch(digest) if isinstance(digest, str) else None
+        sha = match.group(1).lower() if match else ""
+    if installer is None:
+        raise UpdateError(f"release {tag} has no {name}")
     if not 0 < installer.size <= MAX_INSTALLER_BYTES:
         raise UpdateError(f"release {tag}: the installer's size {installer.size} is not plausible")
-    for asset in (installer, checksum):
-        if not _asset_url_ok(asset.url, tag, asset.name):
-            raise UpdateError(f"release {tag}: {asset.name} is not where it should be ({host_of(asset.url)})")
+    if not _asset_url_ok(installer.url, tag, name):
+        raise UpdateError(f"release {tag}: {name} is not where it should be ({host_of(installer.url)})")
     page = data.get("html_url") if isinstance(data.get("html_url"), str) else ""
     if not (page == f"{REPO_URL}/releases/tag/{tag}" or (test_mode() and url_allowed(page))):
         page = f"{REPO_URL}/releases/tag/{tag}"
-    return Release(text, page, installer, checksum)
+    return Release(text, page, installer, sha)
 
 
 def check(current: str = __version__, fetch: Callable = fetch_bytes) -> Optional[Release]:
@@ -290,40 +293,22 @@ def check(current: str = __version__, fetch: Callable = fetch_bytes) -> Optional
     return release_from(data, current)
 
 
-def expected_sha256(raw: bytes, name: str) -> str:
-    """The hash for `name` in a .sha256 file: the one line "<hash>  <name>" (or "<hash> *<name>", the name
-    possibly with a folder in front) that names it. UTF-8 with or without a BOM, UTF-16 with a BOM, and
-    CRLF line ends are all read; a bare hash, or a file naming the installer twice, is refused."""
-    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
-        text = raw.decode("utf-16", "replace")
-    else:
-        text = raw.decode("utf-8-sig", "replace")
-    hashes = set()
-    for line in text.splitlines():
-        words = line.strip().split(None, 1)
-        if len(words) == 2 and SHA256.fullmatch(words[0]):
-            named = re.split(r"[\\/]", words[1].strip().lstrip("*"))[-1]
-            if named == name:
-                hashes.add(words[0].lower())
-    if len(hashes) != 1:
-        raise UpdateError("the .sha256 file does not give one SHA-256 for the installer" if hashes
-                          else f"the .sha256 file has no SHA-256 for {name}")
-    return hashes.pop()
-
-
-def download(release: Release, temp_root: Optional[Path] = None, fetch: Callable = fetch_bytes,
-             fetch_file: Callable = fetch_to) -> Verified:
-    """The verified installer in a fresh folder under %TEMP%. On any error the folder is deleted."""
+def download(release: Release, temp_root: Optional[Path] = None, fetch_file: Callable = fetch_to) -> Verified:
+    """The verified installer in a fresh folder under %TEMP%: its size and SHA-256 must be the ones
+    GitHub lists for it. Without a usable digest nothing is downloaded. On any error the folder is
+    deleted."""
+    if not release.sha256:
+        raise UpdateError(f"GitHub lists no SHA-256 for {release.installer.name}, so it cannot be checked; "
+                          f"get it from the release page (What's new)")
     folder = Path(tempfile.mkdtemp(prefix=TEMP_PREFIX, dir=temp_root))
     try:
-        sha = expected_sha256(fetch(release.checksum.url, MAX_SHA_BYTES), release.installer.name)
         dest = folder / release.installer.name
         size, got = fetch_file(release.installer.url, dest, release.installer.size)
         if size != release.installer.size:
             raise UpdateError(f"the download has {size} bytes, the release says {release.installer.size}")
-        if got.lower() != sha:
+        if got.lower() != release.sha256:
             raise UpdateError("the download does not match its SHA-256")
-        return Verified(dest, size, sha)
+        return Verified(dest, size, release.sha256)
     except BaseException as exc:
         shutil.rmtree(folder, ignore_errors=True)
         if isinstance(exc, (UpdateError, KeyboardInterrupt, SystemExit)):

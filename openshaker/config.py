@@ -12,7 +12,10 @@ DEFAULTS = {
     "windows_startup_asked": False,  # whether the Run entry has been set up (or declined) once
     "haptics_on": True,              # the window's and tray's Haptics on switch; config.json keeps it only while off
     "updates": {"check": True,       # Advanced > Check for updates: ask GitHub once a day (updater.py)
-                "skip": ""},         # "Skip this version": hidden until a newer one appears
+                "skip": "",          # "Skip this version": hidden until a newer one appears
+                "auto": False,       # Advanced > Install updates automatically: off unless the user says yes
+                "auto_asked": False,  # the update bar's one-time question was answered (or Update now / Skip)
+                "auto_done": ""},    # the version an automatic update is installing: the new one says so once
     "presets": {},                   # per-profile user strengths: {key: {"effects": {name: {trim, enabled}}}}
     "profile": None,                 # fallback profile.json (optional); per-game profiles below take precedence
     "profiles": {                    # profile to use for each detected game (auto-switching)
@@ -322,6 +325,11 @@ def _sanitize_user(user: dict | None) -> dict:
         upd.pop("check")              # not true/false: the check stays on
     if not isinstance(upd.get("skip", ""), str):
         upd.pop("skip")
+    for key in ("auto", "auto_asked"):
+        if not isinstance(upd.get(key, False), bool):
+            upd.pop(key)              # not true/false: automatic updates stay off, the question stays unasked
+    if not isinstance(upd.get("auto_done", ""), str):
+        upd.pop("auto_done")
     for name, params in ((u.get("effects") or {})).items():
         if not isinstance(params, dict):
             continue

@@ -38,7 +38,7 @@ extra, just their own telemetry setting; Trackmania needs Openplanet (free,
    **Keep** > **Show more** > **Keep anyway**).
 2. Double-click it. The installer is not code-signed, so Windows may show **"Windows protected your
    PC"**: click **More info**, then **Run anyway**.
-3. Click **Next**. That is the only screen, and it installs straight away: it needs no administrator
+3. Click **Install**. That is the only screen: it needs no administrator
    rights, and **Start with Windows** and a desktop shortcut are both ticked - untick either if you prefer.
 
 OpenShaker starts by itself when setup finishes and opens its window. Closing the window keeps it
@@ -145,8 +145,11 @@ For developers: [development notes](docs/DEVELOPMENT.md), [calibration tools](do
 - **Updates:** once a day OpenShaker asks GitHub whether a newer version exists. If one does, the tray
   icon gets a small **!** and the window a bar with **Update now**, **What's new** and **Skip this
   version** - no pop-ups. **Update now** downloads the installer from this project's GitHub release,
-  checks it against its published SHA-256, installs it and starts OpenShaker again; nothing is
+  checks it against the SHA-256 GitHub publishes for it, installs it and starts OpenShaker again; nothing is
   downloaded before you click it. Switch the check off under **Advanced... > Check for updates**.
+  **Automatic updates** are off unless you switch them on: the first time an update is found, the bar
+  asks once whether to install updates automatically (or use **Advanced... > Install updates
+  automatically**). They then install the same way, in the tray, only when no game is running.
 - To uninstall: Windows Settings > Apps > Installed apps > OpenShaker. It asks whether to delete your
   settings too.
 

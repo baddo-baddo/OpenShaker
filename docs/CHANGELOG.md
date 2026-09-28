@@ -2,6 +2,26 @@
 
 All notable changes to OpenShaker are listed here. Versions follow [semantic versioning](https://semver.org/).
 
+## [1.0.2] - unreleased
+
+### Added
+- **Automatic updates, off by default.** Nothing installs by itself unless you say so.
+  - The first time an update is found, the update bar also asks once: "Install updates automatically
+    when no game is running?" **Yes** switches them on and **No** leaves them off. **Update now** or
+    **Skip this version** count as an answer too.
+  - Change it any time under **Advanced... > Install updates automatically**.
+  - When they are on, OpenShaker waits until no game has run or sent data for 5 minutes. It then
+    downloads, checks and installs the update exactly as **Update now** does, and comes back in the
+    tray; the window says it updated itself.
+  - A skipped version is never installed automatically, and a failed automatic update falls back to the
+    bar ([how updating works](wiki/Start-With-Windows-Updates-and-Uninstalling.md#automatic-updates)).
+
+### Changed
+- The installer's only button now reads **Install** instead of **Next**.
+- **Update now** checks the installer against the SHA-256 that GitHub itself publishes for each release
+  file, instead of a separate `.sha256` file. If GitHub lists none, nothing is downloaded and the bar
+  points to the release page.
+
 ## [1.0.1] - 2026-09-28
 
 ### Added
@@ -49,5 +69,6 @@ The first public release.
 - One-screen installer without administrator rights; clean uninstall.
 - **Send feedback / report a bug** in the tray menu, and issue forms for bugs, feel reports and ideas.
 
+[1.0.2]: https://github.com/baddo-baddo/OpenShaker/releases/tag/v1.0.2
 [1.0.1]: https://github.com/baddo-baddo/OpenShaker/releases/tag/v1.0.1
 [1.0.0]: https://github.com/baddo-baddo/OpenShaker/releases/tag/v1.0.0

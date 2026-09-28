@@ -12,13 +12,13 @@ This is a single entry named **OpenShaker** in your Windows sign-in list (`HKCU\
 
 ### The update check
 
-About 30 seconds after it starts, and then once a day, OpenShaker asks GitHub whether a newer version has been released. The request carries nothing but the app's name and version, and nothing is downloaded. If there is a newer version:
+About 30 seconds after it starts, and then once a day, OpenShaker asks GitHub whether a newer version has been released. The request carries nothing but the app's name and version, and nothing is downloaded (unless you switched on [automatic updates](#automatic-updates)). If there is a newer version:
 
 - the tray icon gets a small red **!** in its corner;
 - the tray menu starts with **Update to X.Y.Z** and **What's new**;
 - the window shows a yellow bar at the top: "OpenShaker X.Y.Z is available", with **Update now**, **What's new** and **Skip this version**.
 
-![The update bar at the top of the window: "OpenShaker 1.0.2 is available (you have 1.0.1)." with the buttons Update now, What's new and Skip this version (an example)](../images/update_bar.png)
+![The update bar at the top of the window: "OpenShaker 1.0.3 is available (you have 1.0.2)." with the buttons Update now, What's new and Skip this version, and under it the one-time question "Install updates automatically when no game is running?" with Yes and No (an example)](../images/update_bar.png)
 
 There is **no pop-up or notification**: you see it when you open the window or the tray menu.
 
@@ -31,8 +31,8 @@ There is **no pop-up or notification**: you see it when you open the window or t
 
 1. If a game is sending data, OpenShaker opens its window and asks first: "Haptics will stop for about 15 seconds while OpenShaker updates. Update now?"
 2. It asks GitHub once more and installs only the version you clicked. If that release was withdrawn or replaced in the meantime, or GitHub's latest is now a version you skipped, it installs nothing, and the bar shows what is on offer now, if anything.
-3. It downloads the new installer and its `.sha256` checksum from the project's GitHub release, into a new folder under `%TEMP%`. It only downloads over HTTPS from GitHub, and gives up if the download takes far too long.
-4. It checks the file's size and its SHA-256 against the release. If anything does not match, it deletes the download, says so in the bar ("Update to X.Y.Z failed: ... Nothing was installed; Update now tries again.") and installs nothing. It checks the file once more right before running it.
+3. It downloads the new installer from the project's GitHub release, into a new folder under `%TEMP%`. It only downloads over HTTPS from GitHub, and gives up if the download takes far too long.
+4. It checks the file's size and its SHA-256 against the ones GitHub lists for that file in the release. If anything does not match, it deletes the download, says so in the bar ("Update to X.Y.Z failed: ... Nothing was installed; Update now tries again.") and installs nothing. It checks the file once more right before running it. If GitHub lists no SHA-256 for the file, nothing is downloaded, and the bar says to get the installer from the release page (**What's new**).
 5. It runs the installer silently. The installer closes OpenShaker, installs the new version over the old one (same folder, no administrator prompt) and starts OpenShaker again: with its window if you clicked **Update now** in the window, in the tray if you used the tray menu. Your settings stay as they are, and so do Start with Windows and the desktop shortcut: whatever you have now is kept.
 6. If the installer stops after it closed OpenShaker, it waits up to 30 seconds for OpenShaker to be gone, then starts the installed copy again, which says in its bar what happened:
    - **"The update to X.Y.Z did not install"**: the installer stopped before it replaced any file (for example OpenShaker took too long to close). Nothing changed, and the update is offered again.
@@ -43,6 +43,23 @@ There is **no pop-up or notification**: you see it when you open the window or t
 While an update started from the tray runs, the tray item reads **Updating to X.Y.Z...**; if it fails, it reads **Update to X.Y.Z failed - open OpenShaker**, and opening the window shows why. Every failure is also noted in `update.log`.
 
 A copy run from source can't update itself: **Update now** opens the release page instead.
+
+### Automatic updates
+
+Off unless you switch them on. The first time an update is found, the update bar also asks **"Install updates automatically when no game is running?"** with **Yes** and **No**. It asks only once:
+
+- **Yes** switches automatic updates on, for this update and later ones. **No** leaves them off.
+- Clicking **Update now** or **Skip this version** instead counts as an answer too, so the question does not come back.
+- You can change your mind any time under **Advanced... > Install updates automatically**.
+- It is a line in the bar, never a pop-up or a notification.
+
+When they are on and an update is found:
+
+1. OpenShaker waits for a quiet moment: no supported game running on this PC and no game data for 5 minutes (also counted from when OpenShaker started). It looks again every 30 seconds, so an update never starts in the middle of a drive.
+2. It then does exactly what **Update now** does (steps 2 to 5 above): it asks GitHub once more, downloads the installer, checks its size and SHA-256, checks the file again right before running it, and installs it silently. If a game starts during the download, it throws the download away and waits again.
+3. OpenShaker comes back in the tray, never with a window. The next time you open the window, the bar says "OpenShaker X.Y.Z updated itself." (**What's new** opens that release), until the next update is offered.
+
+A skipped version is never installed automatically. If an automatic update fails, it is not tried again automatically for that version: the bar says why, and **Update now** is there as usual. Automatic updates need **Check for updates** on, and work only for the installed copy.
 
 ### Updating by hand
 
