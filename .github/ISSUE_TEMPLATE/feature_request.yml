@@ -1,0 +1,15 @@
+name: Idea / feature request
+description: Suggest a new game, effect or improvement.
+labels: ["idea"]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: Your idea
+      description: What would you like OpenShaker to do, and why? For a new game, say whether it has a telemetry output (UDP, shared memory, plugin).
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?

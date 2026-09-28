@@ -1,0 +1,1052 @@
+{
+  "meta": {
+    "created": "2026-09-10T19:10:43",
+    "updated": "2026-09-18T20:47:00",
+    "note": "v6 (2026-09-18, phase B): refit to HaptiConnect replays of the logged raw Forza packets (true kerb and suspension values) and two new laps on a 9000-rpm car. Engine rpm/60 above 6800 rpm and within ~3% of it below (curve to 10000 rpm) at 0.158; gear shift an 80 ms square at rpm/120 (pitched mode); shift light 70 Hz; kerbs a 0.30 sine at 1.25 Hz per m/s; acceleration 58 Hz. Holdouts dist 3.30 -> 2.33 and 2.71 -> 2.21 (seeds 1 and 2). Applied by the maintainer's decision although two acceptance checks miss by hairlines (ACE level +0.13 dB, 70-100 Hz band 6 of 8 laps on seed 2). Reasons per change in the keys below.",
+    "fitted_from": "sessions\\fm_drive_1_hc",
+    "fit_explained_variance": 0.195,
+    "optimized_on": [
+      "sessions\\fm_drive_1_hc",
+      "sessions\\fm_drive_3_hc",
+      "sessions\\fm_drive_4_hc",
+      "sessions\\fm_drive_5_hc"
+    ],
+    "optimized_cost_db": 3.124,
+    "templates": "gear shift, collision and bump one-shots and the kerb cycle are generated in code (effects/base.py synth_template / synth_cycle) from parameters measured on HaptiConnect's output; no recorded audio is used",
+    "template_refit": "gear_shift, impact and road gains fitted with openshaker.optimize on fm_drive_1/3/4/5_hc (fm_drive_6_hc held out); all other effects fixed",
+    "local_data": "the sessions/ recordings and profiles/cal_* runs named in this profile are the author's local calibration data and are not published",
+    "bedfit": "suspension vel_hold_s/vel_curve/speed_floor_curve fitted by the maintainer's calibration notes (not published) to the 41.0 Hz line of HaptiConnect on fm_drive_1_hc, fm_drive_3_hc, fm_drive_4_hc, fm_drive_5_hc (holdout fm_drive_6_hc)",
+    "shift_light_fit": "shift_indicator re-measured on the phase B raw set (fm_drive_1/3/4/5_hc_raw, 8000-rpm car; fm_drive_7/8_hc, 9000-rpm car) by the maintainer's calibration notes (not published). HaptiConnect's shift light is a pure sine at 70.0 Hz (phase slope 70.00-70.02 Hz on fm1/4/5/8 and holdout fm6; 2nd harmonic ~1%), not 69 -> freq 70. It has NO throttle gate: on the 9000-rpm car it stays on at throttle 0 with rpm/max >= 0.86 (lift-offs and downshifts, 45 blocks at throttle < 0.2, all on at 0.38-0.40, still on 0.4-0.8 s after the lift) -> min_throttle 0.5 -> -1 (racing.py gates on throttle > min_throttle, so -1 = no gate). Unchanged: level 0.40 (HaptiConnect 0.40-0.41, ours reads 0.397) and the step at 0.842 +- 0.003 x max rpm on BOTH cars (6735 of 8000, 7575 of 9000 rpm; absolute rpm and max-minus-offset rejected), which the shipped 0.835->0.855 ramp already centres within that error",
+    "engine_level": "engine gain 0.175 -> 0.1646: HaptiConnect engine line measured flat 0.158 at every rpm and throttle on fm_drive_1/3/4/5/6_hc (the maintainer's calibration notes (not published)); ours read 0.168",
+    "gear_shift_fit": "rpm-pitched gear shift. On the raw set (the maintainer's calibration notes (not published)) HaptiConnect's shift burst is a square at rpm/120 Hz (pitch / (rpm/120) median 0.998, 21 of 24 driving shifts within 5 %), amplitude 0.317 (p10-p90 0.316-0.318), 80 ms per gear-byte change (it fires on both N->0 and 0->N+1), no 20 Hz floor (930 rpm plays 7.7 Hz, 714 rpm < 11 Hz), so pitch_hz_range [5, 120]. Gain 0.415 measured by rendering a synthetic shift through compare.render_offline (the same notes): plateau 0.763 x gain at 17-75 Hz -> 0.317. pitch_jitter and the template's freq/duration are unused in this mode.",
+    "kerb_fit": "Kerb cycle measured on the raw-packet training replays (fm_drive_1/3/4/5_hc_raw, fm_drive_7_hc, fm_drive_8_hc; tools in the maintainer's calibration notes (not published)). Pitch: 1.2506 +- 0.008 Hz per m/s (13 clean kerb runs, 7.7-61.2 m/s; the same notes), 77.2 Hz at 61.2 m/s, no cap, still 1.25 x speed at 7.2 Hz / 5.5 m/s: strip_hz_per_ms 1.25, strip_hz_max 100, strip_hz_min 6 kept. Waveform: pure sine (2nd/1st median 0.009, max 0.031; 3rd/1st 0.004), so wavetable_harmonics [1, .2, .45, .2, .15] -> [1.0]. Gate: the rumble_strip flags, not surface_rumble (no flag with 4 wheels on surface >= 1.4: 0.022 sine amplitude, flagged 0.25-0.47; the same notes), and the surface value on the kerb (0.24/1.5/2.6) does not set the level. Level: one sine per flagged wheel, 0.245 each (median of 32 single-wheel segments, IQR 0.228-0.265), flat with speed (0.25 at 8 m/s and at 61 m/s), each wheel with its own phase: a two-wheel segment reads |c_A + c_B| of its single-wheel neighbours (8 of 10 within 0.08, e.g. 0.237 vs 0.225 at -124 deg, 0.483 vs 0.481 at -35 deg; the same notes), relative phases spread over the circle, so two wheels give 0.02-0.53. Our wave mode gates on any wheel and cannot sum per-wheel phases, so the curve is flat at 1/sqrt(2) (unit-RMS sine table: sine amplitude = gain) and gain = the expected any-wheel level, 0.245 x sqrt(1.464 flagged wheels per kerb frame) = 0.30. The old curve (0.36 -> 0.15 RMS falling with speed, x1.05 gain, x1.24 fundamental) read 0.43 at 8 m/s and 0.22 at 47-49 m/s. Supersedes the road_level note (gain 1.05 was the stop-gap for this shape error). Code idea (not in this spec): per-wheel kerb sines (level ~ number of flagged wheels with independent phases).",
+    "h1": "suspension harmonics set to a true square: HaptiConnect bed 3rd/1st 0.32-0.33 and 5th/1st 0.19-0.20 wherever it is strong (the maintainer's calibration notes (not published))",
+    "engine_pitch_fit": "engine.curve rows from 6800 rpm: 57.1 Hz -> rpm/60 Hz (113.33 at 6800 ... 166.67 at 10000), amp column unchanged (0.9616, gain 0.1646 unchanged: 0.1583 = HaptiConnect's 0.159). HaptiConnect's engine line on the raw training set (fm_drive_1/3/4/5_hc_raw, fm_drive_7_hc, fm_drive_8_hc) sits at rpm/60 with no drop at high rpm: f/(rpm/60) median 0.9995-0.9997 in every 250-rpm bin 4000-8000 (16384-sample windows), 139.2 Hz at 8334 rpm (fm_drive_7_hc; the ~70 Hz shift light is a pure sine, 2nd harmonic -37 dB, so this is the engine), amplitude 0.158-0.161 at every rpm up to 8400 (the maintainer's calibration notes (not published)). Rows 1200-6640 rpm kept as shipped; the 880/1040-rpm rows 17.58 Hz -> rpm/60 (14.67, 17.33) plus rows at 560/720 rpm (9.33, 12.0): HaptiConnect plays 11.9 Hz at 715 rpm and 15.4 Hz at 924 rpm (f/(rpm/60) 0.999, amp 0.160, n=66/25 windows); 17.58 Hz is FFT bin 6 of a 16384 window at 48 kHz (a 15 Hz search floor), not a measured pitch; rpm/60 continued to 10000 rpm (extrapolated above 8400 rpm).",
+    "combine_acc_freq": "acceleration.freq 55 -> 58 only, the freq key of the maintainer's calibration notes (not published): HaptiConnect's g effect on the raw set is band noise ~52-65 Hz whose excess-spectrum centroid is 57.7 Hz accelerating, 57.1 braking and 60-61 lateral, median peak 58.3-60.1 Hz in clean acceleration windows (the same notes). The spec's curve_lat, curve_long and wheel_slip keys are measured too but were left out of the combined candidate: with them |level| grows past 0.1 dB (lateral curve: fm_drive_1_hc_raw +0.17; slide: fm_drive_7_hc +0.15, ace_drive_2_hc2 +0.20) because the rest of the raw-set mix is still off in level (the same notes).",
+    "phase_b_safety": "shift_indicator.min_throttle was kept at 0.5 on 2026-09-18 for a braking/downshift stress scene (-5.9 dBFS at Demo scale; not a scene of the Demo itself) and because HaptiConnect's own ACE plugin has no shift light (ACE has its own profile since); this profile sets -1 (shift_light_parity2_2026_09_22: the Demo is unchanged, and the Demo's own limiter caps it at -6.1 dBFS); gear_shift pitch floor 7 Hz (HaptiConnect lowest measured shift 7.7 Hz at 930 rpm; below that the ButtKicker reproduces little)",
+    "impact_parity_fit": "2026-09-20 refit of the collision one-shot to HaptiConnect's own hit (scripts and outputs in the maintainer's calibration notes (not published)). SHAPE ONLY: impact.gain stays 0.9755, attack and release stay 0.002 / 0.004. HaptiConnect's extracted template sessions/_hc_templates/forza_motorsport/impact.wav is ONE cycle of a full-scale square - positive 0-10.0 ms, negative 10.0-19.8 ms (period 19.8 ms = 50.5 Hz), 18.7 ms at full scale (positive half 10.0 ms, negative 8.7 ms) plus a ~1.4 ms low-amplitude tail - so the profile template becomes a 50 Hz square one cycle long (0.020 s) instead of a 48 Hz saw 0.024 s long. Measured on all 21 collision triggers of the 8 raw-set references (the same notes) with windows that bracket the hit on both sides: HaptiConnect's own burst peak is searched +-200 ms around trigger + the lap's lag (its hit leads or lags that estimate by up to 80 ms; median -5 ms), our own shot is searched -20..+60 ms from its exact start, then both sides are measured the same way - 15-150 Hz excess over the local background in a +-90 ms window on each side's own peak, HaptiConnect's recording against OUR FULL MIX. HaptiConnect: -6 dB envelope width 20 ms, -20 dB 65 ms, zero-crossing rate 50 Hz, spectral peak 33.3 Hz, output peak 0.984 (its limiter ceiling). Shipped saw: width 10-12 ms, zcr 33 Hz, spectral peak 41.7 Hz, output peak 0.998, burst energy -2.11 dB training / -1.15 dB holdout / -1.99 dB over all 8 laps (median -2.08). New square: width 20 ms, zcr 50 Hz, output peak 1.000, burst energy -0.86 dB training / -0.47 dB holdout / -0.81 dB over all 8 laps (median -0.88); identical on seeds 1 and 2, and stable across window choices (HC search 100-200 ms, window 60-120 ms: base -1.6 to -2.1, candidate -0.5 to -0.9 dB). Averaged over the 8 laps the limiter now works about as hard as HaptiConnect's: driving samples above the 0.9 knee 0.030% -> 0.055% against HaptiConnect's 0.056%, but per lap the candidate is above HaptiConnect on 4 of the 8 (worst fm_drive_3_hc_raw 0.153% against 0.096%); the residual peak difference (1.000 vs 0.984) is our tanh ceiling against HaptiConnect's 0.985 limiter, a mixer question, not a level error. No other effect moves: paired intensity windows (the same notes, itable_base_s1/itable_final_s1) give 0.00 dB for engine, gear shift, shift light, kerb, road bed, acceleration, slip and lock; impact -3.29 -> -1.37 dB on that metric. Holdout Dist 2.315 -> 2.303 and 2.215 -> 2.160 with |level| 0.038 -> 0.031 and 0.238 -> 0.193; training mean Dist 2.566 -> 2.588 and fm_drive_3_hc_raw |level| +0.105 dB (we were already loud on the training laps, mostly from the road bed). Demo peak -10.17 dBFS, same as the shipped profile (limit -6). HaptiConnect plays a hit at all 21 of our triggers (output peak >= 0.976, median 0.985, against 1.9% of 480 random driving windows), so this level is not compensating for a detector error. The detector mismatch that remains - 6 full-scale HaptiConnect hits at moments where our long+lat rule fires nothing, 4 of them with a wheel on a kerb - is a code item, not a gain.",
+    "applied": "2026-09-27 for release 1.0.0 from the maintainer's calibration notes (not published)",
+    "shift_light_parity2_2026_09_22": "the maintainer's calibration notes (not published) (scorer cache v6; every number is HaptiConnect vs OUR FULL MIX - the whole profile through one HapticEngine with the output limiter - same band and windows; seeds 1 and 2 identical). Built from the shipped profile with the same notes --spec candidates/forza_motorsport/parity2_shift_light.json. Three shift_indicator keys. (1) min_throttle 0.5 -> -1 (racing.py plays when throttle > min_throttle, so -1 = no gate): HaptiConnect plays the light at lift-off. 62-78 Hz level over every forward-gear lift-off on the light's plateau (rpm/max >= 0.86, throttle <= 0.5, >= 0.06 s; the same notes), median ours - HC: training 6 stretches (1.60 s, HC 0.36-0.43) -25.6 -> -0.1 dB; held out fm_drive_6_hc_raw 1 stretch (0.09 s) -8.4 -> +2.5 dB; ace_drive_3_hc and ace_drive_2_hc2 (ACE drives through HaptiConnect's Forza Motorsport plugin, never fitted) 7 stretches (2.64 s) -20.8 -> +0.2 dB. (2) min_gear 0 with below_min_gear_scale 0.001 (the level is scaled below gear 0, i.e. in reverse only): HaptiConnect has no 70 Hz light in reverse. A 70.0 Hz lock-in over each lit reverse stretch reads HC 0.0080 (fm_drive_1_hc_raw, 0.97 s) and 0.0028 (fm_drive_4_hc_raw, 0.50 s), inside the spread of HC's own readings at 60-80 Hz beside it (0.002-0.036 and 0.0004-0.030), and 0.0015 on ace_drive_3_hc (1.19 s, never fitted), where ours reads 0.0015 at this scale (0.40 before; scale 0.01 would read +8.7 dB there, 0.02 +14.5 dB; the same notes). The 66-74 Hz window measure (the same notes itable method) goes +20.1 -> -10.5 dB (training, n 11) and +29.4 -> -11.7 dB (cross-check, n 15): what remains is HaptiConnect broadband content (on the training laps also a 0.031-0.037 line at 66.7 Hz = max_rpm/120, cause unknown), not a light, so no scale was raised to fill it. 0.001 (-60 dB) rather than 0: racing.py's tone stops its phase at amplitude 0, so 0 would shift the phase (not the level) of every later light; with 0.001 the min_gear keys leave every forward-gear sample of all ten laps identical to the shipped profile (the same notes); the gate removal changes the lift-off moments and, through the same phase, the samples but not the level of later lights. Neutral keeps the light (min_gear 0, not 1): after the gear-shift burst HC's 62-78 Hz level in neutral is 0.31 (training, n 11) and 0.40 (cross-check, n 11), where light-on reads -0.2 / -0.3 dB and light-off -10.6 / -15.5 dB (the same notes); on the three reverse -> neutral transitions HC rises from 0.03-0.04 in reverse to 0.31-0.40 in neutral. EVIDENCE IS THIN for reverse: 2.2 s of lit reverse on two training laps and none on a held-out Forza Motorsport lap, so the reverse law is confirmed on ace_drive_3_hc (same plugin) and on the Forza Horizon plugin (fh5_drive_4_hc: HC 0.0048 at 70.0 Hz). Full-mix scores (Dist / level dB, shipped -> this file): fm_drive_1_hc_raw 1.661/-0.10 -> 1.771/-0.24, fm_drive_3_hc_raw 2.729/+0.16 unchanged, fm_drive_4_hc_raw 2.751/+0.63 -> 2.488/+0.40, fm_drive_5_hc_raw 2.540/+0.32 unchanged, fm_drive_7_hc 2.440/+0.18 -> 2.509/+0.31, fm_drive_8_hc 2.934/+0.59 -> 2.943/+0.61; held out fm_drive_6_hc_raw 2.288/-0.04 -> 2.250/-0.01, fm_drive_2_hc_raw 2.175/-0.26 unchanged; cross-check ace_drive_3_hc 2.722/-0.69 -> 2.410/-0.50, ace_drive_2_hc2 3.016/-0.77 -> 2.981/-0.75. Training mean Dist 2.509 -> 2.497, held-out mean 2.231 -> 2.212, held-out mean |level| 0.15 -> 0.14, cross-check mean 2.869 -> 2.695. The spectral part of Dist improves on every lap that changes; the fm_drive_1 and fm_drive_7 rises are their |level| term only (the reverse light was 0.15 dB of fm_drive_1's energy, a lap already under HaptiConnect; the lift-off light adds 0.13 dB to fm_drive_7, whose excess sits in the 9000-rpm car's road bed). Other effects: gear shift over all 246 shifts -0.19 -> -0.16 dB, impact over all 24 unchanged (the same notes). Demo unchanged: the same notes -7.82 dBFS on seeds 0-7 either way, the SafeLevelTests measure -8.20 dBFS with a -0.38 dB trim (the Demo script never lifts off above 0.835 x max rpm); the old lift-off + braking + downshift stress scene, not a Demo scene, reads -9.02 -> -5.90 dBFS at Demo scale."
+  },
+  "effects": {
+    "engine": {
+      "curve": [
+        [
+          560.0,
+          9.33,
+          0.9616
+        ],
+        [
+          720.0,
+          12.0,
+          0.9616
+        ],
+        [
+          880.0,
+          14.67,
+          0.9616
+        ],
+        [
+          1040.0,
+          17.33,
+          0.9616
+        ],
+        [
+          1200.0,
+          20.63,
+          0.9616
+        ],
+        [
+          1360.0,
+          22.84,
+          0.9616
+        ],
+        [
+          1520.0,
+          24.9,
+          0.9616
+        ],
+        [
+          1680.0,
+          27.45,
+          0.9616
+        ],
+        [
+          1840.0,
+          31.21,
+          0.9616
+        ],
+        [
+          2000.0,
+          33.76,
+          0.9616
+        ],
+        [
+          2160.0,
+          35.79,
+          0.9616
+        ],
+        [
+          2320.0,
+          38.05,
+          0.9616
+        ],
+        [
+          2480.0,
+          41.54,
+          0.9616
+        ],
+        [
+          2640.0,
+          44.58,
+          0.9616
+        ],
+        [
+          2800.0,
+          46.69,
+          0.9616
+        ],
+        [
+          2960.0,
+          48.8,
+          0.9616
+        ],
+        [
+          3120.0,
+          51.65,
+          0.9616
+        ],
+        [
+          3280.0,
+          55.28,
+          0.9616
+        ],
+        [
+          3440.0,
+          57.64,
+          0.9616
+        ],
+        [
+          3600.0,
+          59.68,
+          0.9616
+        ],
+        [
+          3760.0,
+          62.06,
+          0.9616
+        ],
+        [
+          3920.0,
+          65.75,
+          0.9616
+        ],
+        [
+          4080.0,
+          68.5,
+          0.9616
+        ],
+        [
+          4240.0,
+          70.59,
+          0.9616
+        ],
+        [
+          4400.0,
+          72.72,
+          0.9616
+        ],
+        [
+          4560.0,
+          75.86,
+          0.9616
+        ],
+        [
+          4720.0,
+          79.31,
+          0.9616
+        ],
+        [
+          4880.0,
+          81.5,
+          0.9616
+        ],
+        [
+          5040.0,
+          83.53,
+          0.9616
+        ],
+        [
+          5200.0,
+          86.15,
+          0.9616
+        ],
+        [
+          5360.0,
+          89.88,
+          0.9616
+        ],
+        [
+          5520.0,
+          92.4,
+          0.9616
+        ],
+        [
+          5680.0,
+          94.44,
+          0.9616
+        ],
+        [
+          5840.0,
+          96.73,
+          0.9616
+        ],
+        [
+          6000.0,
+          100.25,
+          0.9616
+        ],
+        [
+          6160.0,
+          103.23,
+          0.9616
+        ],
+        [
+          6320.0,
+          105.36,
+          0.9616
+        ],
+        [
+          6480.0,
+          107.44,
+          0.9616
+        ],
+        [
+          6640.0,
+          110.24,
+          0.9616
+        ],
+        [
+          6800.0,
+          113.33,
+          0.9616
+        ],
+        [
+          6960.0,
+          116.0,
+          0.9616
+        ],
+        [
+          7120.0,
+          118.67,
+          0.9616
+        ],
+        [
+          7280.0,
+          121.33,
+          0.9616
+        ],
+        [
+          7440.0,
+          124.0,
+          0.9616
+        ],
+        [
+          7600.0,
+          126.67,
+          0.9616
+        ],
+        [
+          7760.0,
+          129.33,
+          0.9616
+        ],
+        [
+          7920.0,
+          132.0,
+          0.9616
+        ],
+        [
+          8080.0,
+          134.67,
+          0.9616
+        ],
+        [
+          8240.0,
+          137.33,
+          0.9616
+        ],
+        [
+          8400.0,
+          140.0,
+          0.9616
+        ],
+        [
+          8560.0,
+          142.67,
+          0.9616
+        ],
+        [
+          8720.0,
+          145.33,
+          0.9616
+        ],
+        [
+          8880.0,
+          148.0,
+          0.9616
+        ],
+        [
+          9040.0,
+          150.67,
+          0.9616
+        ],
+        [
+          9200.0,
+          153.33,
+          0.9616
+        ],
+        [
+          9360.0,
+          156.0,
+          0.9616
+        ],
+        [
+          9520.0,
+          158.67,
+          0.9616
+        ],
+        [
+          9680.0,
+          161.33,
+          0.9616
+        ],
+        [
+          9840.0,
+          164.0,
+          0.9616
+        ],
+        [
+          10000.0,
+          166.67,
+          0.9616
+        ]
+      ],
+      "amp_throttle": 0.0013,
+      "harmonic": 0.0,
+      "gain": 0.1646
+    },
+    "acceleration": {
+      "freq": 58.0,
+      "gain": 0.12,
+      "curve_long": [
+        [
+          -10,
+          1.3
+        ],
+        [
+          -8,
+          1.0
+        ],
+        [
+          -7,
+          0.5
+        ],
+        [
+          -6,
+          0.22
+        ],
+        [
+          -4,
+          0.02
+        ],
+        [
+          -2,
+          0.0
+        ],
+        [
+          0,
+          0.0
+        ],
+        [
+          2,
+          0.066
+        ],
+        [
+          3,
+          0.3
+        ],
+        [
+          4,
+          0.6
+        ],
+        [
+          10,
+          0.78
+        ]
+      ],
+      "curve_lat": [
+        [
+          4,
+          0.02
+        ],
+        [
+          6,
+          0.22
+        ],
+        [
+          7,
+          0.5
+        ],
+        [
+          8,
+          1.0
+        ],
+        [
+          12,
+          1.2
+        ]
+      ],
+      "burst_s": 0.0
+    },
+    "impact": {
+      "template": {
+        "shape": "square",
+        "freq": 50.0,
+        "duration": 0.02,
+        "attack": 0.002,
+        "release": 0.004
+      },
+      "gain": 0.9755,
+      "fixed_amp": true,
+      "threshold": 15.0,
+      "min_hold_s": 0.03,
+      "axes": [
+        "long",
+        "lat"
+      ],
+      "cooldown": 0.3
+    },
+    "wheel_slip": {
+      "freq": 54.5,
+      "slide_tone_freq": 54.5,
+      "spin_threshold": 0.45,
+      "spin_full": 0.6,
+      "spin_max": 1.4,
+      "slide_threshold": 0.45,
+      "slide_full": 0.6,
+      "slide_max": 1.2,
+      "spin_wheels": [
+        2,
+        3
+      ],
+      "need_throttle": false,
+      "gain": 0.1313,
+      "harmonics": [
+        0.0,
+        0.11,
+        0.0,
+        0.04
+      ]
+    },
+    "gear_shift": {
+      "template": {
+        "shape": "square",
+        "freq": 52.0,
+        "duration": 0.08,
+        "attack": 0.002,
+        "release": 0.003
+      },
+      "gain": 0.415,
+      "pitch_jitter": [
+        0.9,
+        1.1
+      ],
+      "neutral_window_s": 0.0,
+      "cooldown": 0.05,
+      "pitch_hz_per_rpm": 0.008333333,
+      "pitched_duration_s": 0.08,
+      "pitch_hz_range": [
+        7.0,
+        120.0
+      ],
+      "pitch_rpm_from": "now"
+    },
+    "wheel_lock": {
+      "binary": true,
+      "threshold": 3.5,
+      "need_brake": true,
+      "freq": 56.4,
+      "tone_amp": 1.0,
+      "noise_amp": 0.0,
+      "gain": 0.18
+    },
+    "suspension": {
+      "template": {
+        "shape": "sine",
+        "freq": 45.0,
+        "duration": 0.05,
+        "attack": 0.002,
+        "decay": 0.014,
+        "harmonics": [
+          0.4,
+          0.45
+        ],
+        "level": 1.0
+      },
+      "gain": 1.6,
+      "fixed_amp": true,
+      "vert_threshold": 12.0,
+      "min_interval": 0.1,
+      "idle_tone_amp": 0.0,
+      "idle_tone_freq": 41.2,
+      "texture_gain": 0.0,
+      "threshold": 5.0,
+      "full": 20.0,
+      "harmonics": [
+        0.0,
+        0.333,
+        0.0,
+        0.2,
+        0.0,
+        0.143
+      ],
+      "latch_hold_s": 0.0,
+      "pulse_amp": 0.0,
+      "idle_min_speed": 1.0,
+      "vel_curve": [
+        [
+          0,
+          0.0
+        ],
+        [
+          1,
+          0.0
+        ],
+        [
+          2,
+          0.0745
+        ],
+        [
+          3,
+          0.1256
+        ],
+        [
+          4,
+          0.1256
+        ],
+        [
+          5,
+          0.1262
+        ],
+        [
+          6.5,
+          0.161
+        ],
+        [
+          8.5,
+          0.208
+        ],
+        [
+          11,
+          0.208
+        ],
+        [
+          14,
+          0.2189
+        ],
+        [
+          18,
+          0.2189
+        ],
+        [
+          25,
+          0.2224
+        ],
+        [
+          35,
+          0.2224
+        ],
+        [
+          60,
+          0.2224
+        ]
+      ],
+      "vel_hold_s": 0.05,
+      "speed_floor_curve": [
+        [
+          0,
+          0.0051
+        ],
+        [
+          20,
+          0.0051
+        ],
+        [
+          30,
+          0.0051
+        ],
+        [
+          40,
+          0.0051
+        ],
+        [
+          50,
+          0.0051
+        ],
+        [
+          60,
+          0.0051
+        ],
+        [
+          80,
+          0.0051
+        ]
+      ]
+    },
+    "road": {
+      "wavetable_harmonics": [
+        1.0
+      ],
+      "strip_hz_per_ms": 1.25,
+      "strip_hz_max": 100.0,
+      "strip_hz_min": 6.0,
+      "strip_amp_curve": [
+        [
+          0,
+          0.7071
+        ],
+        [
+          60,
+          0.7071
+        ]
+      ],
+      "gain": 0.3,
+      "surface_gain": 0.0
+    },
+    "abs": {
+      "gain": 0.25,
+      "freq": 50.0,
+      "pulse_hz": 13.0
+    },
+    "shift_indicator": {
+      "enabled": true,
+      "gain": 1.0,
+      "freq": 70.0,
+      "pulse_hz": 0.0,
+      "min_throttle": -1.0,
+      "rpm_curve": [
+        [
+          0.7,
+          0.0
+        ],
+        [
+          0.835,
+          0.0
+        ],
+        [
+          0.855,
+          0.4
+        ],
+        [
+          1.0,
+          0.4
+        ]
+      ],
+      "min_gear": 0,
+      "below_min_gear_scale": 0.001
+    }
+  },
+  "analysis": {
+    "engine": {
+      "amp_throttle": 0.0013,
+      "harmonic": 0.002,
+      "frames": 9742,
+      "freq_range": [
+        17.6,
+        132.8
+      ],
+      "table": [
+        [
+          880.0,
+          17.58,
+          0.8201567828655243,
+          0.20574162679425836,
+          418
+        ],
+        [
+          1040.0,
+          17.58,
+          0.9161601960659027,
+          0.5,
+          200
+        ],
+        [
+          1200.0,
+          20.63,
+          0.9622792899608612,
+          0.5,
+          206
+        ],
+        [
+          1360.0,
+          22.84,
+          0.988058865070343,
+          0.5,
+          202
+        ],
+        [
+          1520.0,
+          24.9,
+          0.9807323515415192,
+          0.5,
+          202
+        ],
+        [
+          1680.0,
+          27.45,
+          0.9435980319976807,
+          0.5,
+          204
+        ],
+        [
+          1840.0,
+          31.21,
+          0.9440974295139313,
+          0.5,
+          202
+        ],
+        [
+          2000.0,
+          33.76,
+          0.9803173542022705,
+          0.4975609756097561,
+          205
+        ],
+        [
+          2160.0,
+          35.79,
+          0.9866030812263489,
+          0.5025125628140703,
+          199
+        ],
+        [
+          2320.0,
+          38.05,
+          0.9591085612773895,
+          0.5,
+          208
+        ],
+        [
+          2480.0,
+          41.54,
+          0.9333419799804688,
+          0.49748743718592964,
+          199
+        ],
+        [
+          2640.0,
+          44.58,
+          0.9674863815307617,
+          0.5024390243902439,
+          205
+        ],
+        [
+          2800.0,
+          46.69,
+          0.9865639209747314,
+          0.5,
+          198
+        ],
+        [
+          2960.0,
+          48.8,
+          0.9724652767181396,
+          0.5,
+          208
+        ],
+        [
+          3120.0,
+          51.65,
+          0.9349590837955475,
+          0.5,
+          202
+        ],
+        [
+          3280.0,
+          55.28,
+          0.9516481757164001,
+          0.5,
+          202
+        ],
+        [
+          3440.0,
+          57.64,
+          0.9831614196300507,
+          0.5,
+          206
+        ],
+        [
+          3600.0,
+          59.68,
+          0.9819052219390869,
+          0.5,
+          200
+        ],
+        [
+          3760.0,
+          62.06,
+          0.949000746011734,
+          0.5,
+          202
+        ],
+        [
+          3920.0,
+          65.75,
+          0.9341926872730255,
+          0.5,
+          202
+        ],
+        [
+          4080.0,
+          68.5,
+          0.9733329713344574,
+          0.5,
+          206
+        ],
+        [
+          4240.0,
+          70.59,
+          0.9852293431758881,
+          0.5,
+          202
+        ],
+        [
+          4400.0,
+          72.72,
+          0.9646078646183014,
+          0.5,
+          200
+        ],
+        [
+          4560.0,
+          75.86,
+          0.9309226274490356,
+          0.5,
+          206
+        ],
+        [
+          4720.0,
+          79.31,
+          0.959892600774765,
+          0.5,
+          202
+        ],
+        [
+          4880.0,
+          81.5,
+          0.9845965504646301,
+          0.5,
+          202
+        ],
+        [
+          5040.0,
+          83.53,
+          0.976967990398407,
+          0.5,
+          200
+        ],
+        [
+          5200.0,
+          86.15,
+          0.9393133521080017,
+          0.4975845410628019,
+          207
+        ],
+        [
+          5360.0,
+          89.88,
+          0.9426980018615723,
+          0.5024875621890548,
+          201
+        ],
+        [
+          5520.0,
+          92.4,
+          0.9784451425075531,
+          0.5,
+          202
+        ],
+        [
+          5680.0,
+          94.44,
+          0.984208732843399,
+          0.5,
+          208
+        ],
+        [
+          5840.0,
+          96.73,
+          0.955651044845581,
+          0.49748743718592964,
+          199
+        ],
+        [
+          6000.0,
+          100.25,
+          0.9320446252822876,
+          0.5024390243902439,
+          205
+        ],
+        [
+          6160.0,
+          103.23,
+          0.9667967259883881,
+          0.5,
+          198
+        ],
+        [
+          6320.0,
+          105.36,
+          0.9850239157676697,
+          0.4975845410628019,
+          207
+        ],
+        [
+          6480.0,
+          107.44,
+          0.9704093933105469,
+          0.5025125628140703,
+          199
+        ],
+        [
+          6640.0,
+          110.24,
+          0.9264038503170013,
+          0.5,
+          206
+        ],
+        [
+          6800.0,
+          57.15,
+          0.42491674423217773,
+          0.5,
+          206
+        ],
+        [
+          6960.0,
+          57.1,
+          0.40510226786136627,
+          0.5,
+          200
+        ],
+        [
+          7120.0,
+          57.1,
+          0.41279783844947815,
+          0.5,
+          202
+        ],
+        [
+          7280.0,
+          57.11,
+          0.4007727801799774,
+          0.5,
+          202
+        ],
+        [
+          7440.0,
+          57.1,
+          0.3626672625541687,
+          0.5,
+          206
+        ],
+        [
+          7600.0,
+          57.12,
+          0.40532316267490387,
+          0.5,
+          200
+        ],
+        [
+          7760.0,
+          57.09,
+          0.40169350802898407,
+          0.5,
+          202
+        ],
+        [
+          7920.0,
+          57.1,
+          0.40328720211982727,
+          0.5,
+          204
+        ],
+        [
+          8080.0,
+          57.1,
+          0.39856231212615967,
+          0.5,
+          400
+        ]
+      ]
+    },
+    "acceleration": {
+      "freq": 59.7,
+      "centroid": 61.1,
+      "amp": 0.9782,
+      "amp_p90": 0.9952,
+      "frames": 3200,
+      "amp_per_unit": 0.0947
+    },
+    "impact": {
+      "peak": 0.9866943359375,
+      "peak_max": 0.999969482421875,
+      "duration": 0.043333333333333335,
+      "count": 6,
+      "template_similarity": 0.724
+    },
+    "wheel_lock": {
+      "freq": 45.9,
+      "centroid": 53.7,
+      "amp": 0.0018,
+      "amp_p90": 0.0021,
+      "frames": 2400,
+      "amp_per_unit": 0.0
+    },
+    "wheel_slip": {
+      "freq": 35.2,
+      "centroid": 0.0,
+      "amp": 0.0,
+      "amp_p90": 0.0,
+      "frames": 900,
+      "amp_per_unit": 0.0
+    },
+    "probes": {
+      "acceleration": "~60 Hz tone; on at ~3 m/s2 accelerating, ~7 braking, ~7 lateral; full scale within ~1-2 m/s2 (lower thresholds than the BeamNG plugin)",
+      "collision": "fixed ~45 ms hit 20-38 Hz on g jumps >= ~15 m/s2 held >= 3 frames, long or lat; speed drops alone ignored",
+      "engine": "tone at rpm/60 Hz, ~0.9 amplitude, no harmonics, throttle independent",
+      "wheel_slip": "band-limited: rear slip ratio ~0.5-1.3 or slip angle ~0.5-0.8 -> 54.5 Hz tone; larger values, front/all-wheel spin ignored",
+      "rumble_strips": "no response in either layout: non-functional",
+      "shift_indicator": "no response in either layout: non-functional",
+      "wheel_lock": "56.4 Hz full-scale tone only when the FRONT wheels lock while the rears keep turning, under brake",
+      "layout": "this plugin decodes gear/pedals at the Forza HORIZON offsets; the 324-byte layout must be used",
+      "gear_shift": "94 ms full-scale burst on every gear-byte change (Horizon layout); pure rpm drops ignored",
+      "suspension": "41.2 Hz square wave, continuous; amplitude follows recent suspension velocity (1 s peak-hold): ~0.03 smooth, 0.08 at 15/s, 0.2 at 25+/s (strength 0.5)",
+      "waveforms": "engine, lock, acceleration: sine; suspension: square (h3 .33 h5 .2); gear shift: square-ish burst; slip: sine + small h3",
+      "engine_lap": "engine amplitude constant 0.159 on the lap regardless of throttle/speed/rpm/gear (strength 0.5)"
+    },
+    "gear_shift": {
+      "peak": 0.999969482421875,
+      "peak_max": 0.999969482421875,
+      "duration": 0.09416666666666666,
+      "count": 20,
+      "template_similarity": 0.818
+    },
+    "strength_law": "HaptiConnect effect strength 0.5 produced ~0.22 of the strength-1.0 amplitude (about -13 dB) on the real lap",
+    "rumble_strips": "measured on real laps: HaptiConnect DOES render rumble strips (SurfaceRumble 1.5-2.6 + wheel flag): looped rough cycle at ~1.25 Hz per m/s capped ~42 Hz, rms ~0.3 falling to ~0.15 at high speed (strength 0.5); the earlier probe used SurfaceRumble <= 1.0 and never triggered it",
+    "suspension": "41.0 Hz square wave at all speeds; amplitude = max(curve(1 s peak susp velocity), low-speed floor(speed)); pooled from 5 Forza Motorsport laps (strength 0.5)",
+    "shift_indicator": "on real laps: continuous ~66-70 Hz tone at full throttle, level ramps with rpm/max from ~0.78 (0.1) to 0.9+ (0.4) at strength 0.5; the synthetic probe never triggered it",
+    "gear_shift_lap": "on laps HaptiConnect fires its ~94 ms burst on every gear-byte change (Forza passes through neutral -> two bursts ~220 ms), peak ~0.5-0.7 at strength 0.5, pitch randomized per trigger (p10 24, p50 51, p90 70 Hz)"
+  }
+}

@@ -1,0 +1,43 @@
+# Settings, logs and recordings made while using or tuning the app
+# (an installed copy keeps its settings in %APPDATA%\OpenShaker)
+config.json
+config.json.bak
+config.json.tmp
+*.bak
+*.log
+sessions/
+
+# Recorded audio is never published, wherever a tool saved it
+*.wav
+*.npy
+
+# Profiles: only the shipped profile.json files are published (one allowlist line per game).
+# Calibration runs, experiments, backups and analysis output stay local.
+/profiles/*
+!/profiles/forza_motorsport/
+!/profiles/forza_horizon/
+!/profiles/beamng/
+!/profiles/trackmania/
+!/profiles/ace/
+/profiles/*/*
+!/profiles/*/profile.json
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+*_env/
+
+# Build output (the Setup exe is uploaded to GitHub Releases, not committed)
+build/
+dist/
+Output/
+
+# Editor, assistant and Windows folder files
+.claude/
+.vscode/
+desktop.ini
+Thumbs.db

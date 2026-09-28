@@ -1,0 +1,780 @@
+{
+  "meta": {
+    "created": "2026-09-10T18:55:17",
+    "level_fit": "removed 2026-09-20 (exact parity): the x0.2488 anchor of 2026-09-11 no longer applies; see parity_fit",
+    "templates": "gear shift, collision and bump one-shots and the kerb cycle are generated in code (effects/base.py synth_template / synth_cycle) from parameters measured on HaptiConnect's output; no recorded audio is used",
+    "template_refit": "superseded 2026-09-20: the gear shift is no longer a fixed 34 Hz template with an energy-matched gain. It plays in pitched mode at rpm/120 for 0.165 s with gain 0.63, measured against HaptiConnect's own bursts on beamng_drive_1_hc and beamng_drive_3_hc (see parity_fit). The 2026-09-11 note that a fit hit the -20 dB bound applied to the old fixed-pitch template scored on the unmasked recording.",
+    "local_data": "the sessions/ recordings and profiles/cal_* runs named in this profile are the author's local calibration data and are not published",
+    "parity_fit": "Exact-parity refit (2026-09-20, the maintainer's calibration notes (not published); maintainer: 'I want our output to the bass shaker to be the exact same as the hapticonnect output, including loudness and intensity'). Built by the same notes --spec from the SHIPPED profiles/beamng/profile.json. References: sessions/beamng_drive_1_hc (OutGauge only, engine-dominated, trustworthy level - the lap the profile was fitted on) and sessions/beamng_drive_3_hc restricted to its valid windows 81.09-96.04, 99.04-99.39, 99.69-100.79 s (held out, never scored unmasked). Every intensity below is HaptiConnect's recording against our FULL live mix (the ten preset effects summed + HapticEngine's 0.9-knee soft limiter, master 1.0) at the same moments, in the same band, with the same window - never HaptiConnect's recording against one effect rendered alone. All numbers are on the 2026-09-20 scorer (render cache v5) and came out identical on seeds 1 and 2. Tools and outputs: the same notes (the same notes). (1) The deliberate x0.2488 level anchor of 2026-09-11 is removed (meta.level_fit). (2) engine: HaptiConnect's line is flat at 0.9078 (drive 1, 732 steady windows) / 0.9145 (drive 3, 63) at every rpm below the rev limiter while the profile curve's amplitude column ripples (0.8082 at 880 rpm, 0.91-0.97 above 1200, 0.9448 median), so the column is set to 1.0 and engine.gain 0.908 carries the level: ours/HC +0.02 dB (drive 1) and -0.07 dB (drive 3), against -11.50 / -12.00 dB shipped. That is x3.76 of the shipped engine line (0.2416 -> 0.9099). (3) Rev limiter: NO engine amplitude drop, and the curve's 0.5477/0.5279 rows at 7920/8080 rpm (0.5488/0.5290 in analysis.engine.table) are flattened with the rest. At rpm >= ~0.975 x max_rpm HaptiConnect plays a second voice we do not have - 50-72 Hz power 0.332 (drive 1, 74 windows) / 0.209 (drive 3, 29), a ~60 Hz carrier amplitude-modulated at exactly 10 Hz - and its own limiter ducks its engine under it (HC's line 0.568 / 0.602 there while ours stays at 0.908, i.e. ours +4.0 / +3.5 dB). We play 0.0003 / 0.0008 in that band (-62.2 / -48.7 dB). CODE ITEM, not faked with a gain: the law is rpm/max_rpm, which engine.curve cannot express, and the ducking needs a mixer. (4) gear_shift: pitched at rpm/120 for 0.165 s; pitch_hz_range [10, 120] because at idle (~1375 rpm) HaptiConnect's burst sounds at 11.75 Hz and the default range clamped ours to 20 Hz (ours 11.5 Hz now); gain 0.63 = 0.9 x 0.63 x 0.845 = 0.479 absolute. Burst amplitude in the live mix ours/HC -0.26 dB (drive 1, 15 clean shifts, HC 0.531), +0.20 dB (drive 1, 17 idle shifts, HC 0.480), +0.83 dB (drive 3, 4 shifts, HC 0.510); shipped -10.7 / -10.0 / -9.3 dB. (5) acceleration: unchanged at the shipped 0.2488 and deliberately NOT un-anchored. Holding it while the engine rises x3.76 IS the -11.5 dB correction the measurements ask for. On drive 3, in the 26 windows where our acceleration plays with rpm < 0.975 x max_rpm, no gear change within 0.45 s and the engine line clear of 60 Hz, the 56-64 Hz tone measured against the engine line is ours/HC +2.1 dB (median; +2.9 dB over the 13 windows with rpm < 0.95 x max_rpm), and by the 60 Hz-peak measure over all 39 acceleration steps +0.3 dB (the clean lateral plateau 94.85-95.15 s: -0.8 dB). Un-anchoring it to 1.0 would put that ratio at +13.9 / +15.0 dB and the tone itself +14.2 / +15.4 dB over HaptiConnect. The the same notes candidate's acceleration.gain 0.2559 is dropped: it is 0.24 dB from the shipped value. (6) wheel_slip gain 0 and suspension.idle_tone_amp 0. HaptiConnect's BeamNG preset has no slip effect, and its 41 Hz bed cannot be written as a constant amplitude: measured at 41.3 Hz it is 0.298 with the engine off and the car parked (drive 3, 137-149 s), 0.0100 while the engine alone plays (drive 1, 17 windows where the line stands more than 4x above its own noise shelf) and <= 0.0017, i.e. at that shelf and not detectable, while driving hard on drive 3 (15 windows). A fixed tone sized to drive 1 (idle_tone_amp 0.0145 = 0.0102 absolute) lands on HaptiConnect there (+0.2 dB) but is +15.4 dB over the held-out drive 3, and it moves Dist by only -0.009 (drive 1) / +0.008 (drive 3), so nothing is added. CODE ITEM: HaptiConnect's mixer ducks that bed by 30-45 dB under the engine. Ours now sits -34.2 dB (drive 1) / -9.8 dB (drive 3) under HaptiConnect's 41 Hz line, carried by the engine's own skirt. (7) abs, road and shift_indicator gain 0: HaptiConnect's BeamNG preset runs only RPMs, Gear Shift, Acceleration, Collisions, Suspension and Wheels Lock - no ABS, kerb, slip or shift light. The maintainer's OpenShaker presets force every effect enabled, so this is gain 0, never 'enabled': false. (8) wheel_lock 1.0, impact 1.668 and suspension 0.7 are exactly x4.019 of the shipped gains, i.e. their fitted values before the 2026-09-11 anchor. There is NO usable HaptiConnect evidence for lock, impacts or bumps: drive 3's lock-up and crash fall inside HaptiConnect's replay-fault spans and drive 1 carries no g-forces. Said plainly: restored, not measured. (9) Scores, shipped -> this profile (cache v5, seeds 1 and 2 identical): beamng_drive_1_hc on Session.active (1312 frames) level -10.860 -> +0.417 dB, Dist 14.305 -> 1.569; beamng_drive_3_hc on its valid mask (328 frames) level -9.484 -> +1.162 dB, Dist 12.747 -> 2.734. (10) LOUDNESS WARNING, over ALL driving samples and not only the valid mask: this profile passes HapticEngine's 0.9 knee on 14.98 % of drive 1's 65.6 driving seconds and 19.66 % of drive 3's 32.0, and reaches 0.999 (flat-topped) on 0.92 % / 5.09 %; HaptiConnect on the same drive-1 samples is 10.57 % / 0.00 %. 93 % of drive 3's flat-topped samples lie outside HaptiConnect's valid windows, in the crash and lock-up stretches, where the loudest voice is wheel_lock (53 %) - one of the restored, unmeasured gains of (8). With HaptiConnect's own mixer emulated in place of our soft limiter the same renders pass 0.9 on 13.92 % / 10.53 % of those samples and never flat-top.",
+    "parity_open": "NOT measured, carried at 1/0.2488 of their fitted values because HaptiConnect's own output faulted at every such moment in both references: wheel_lock 1.0, impact 1.668, suspension 0.7. HaptiConnect's BeamNG preset does have Wheels Lock, Collisions and Suspension at strength 1, so silencing or leaving them 12 dB low would be a known-wrong level; these are the last BeamNG gains without direct evidence. wheel_lock leads about half the samples where our output reaches the limiter, so one new BeamNG recording with a clean lock-up and a clean collision should settle all three.",
+    "parity_judgement": "Applied 2026-09-20 on the maintainer's exact-parity decision: the x0.2488 same-loudness anchor is gone and BeamNG now plays at HaptiConnect's own level (engine line 0.908 against its 0.91). THESE LEVELS STAND UNTIL ONE CLEAN BeamNG RECORDING EXISTS: wheel_lock 1.0, impact 1.668 and suspension 0.7 are carried at 1/0.2488 of their fitted values with no HaptiConnect evidence at all, because HaptiConnect's output faulted (digital silence, then full-scale blasts) at every lock-up, collision and bump in both references. HaptiConnect's BeamNG preset does play Wheels Lock, Collisions and Suspension at strength 1, so leaving them 12 dB low would be a known-wrong level; the risk is the other way, that one of the three is now too strong. Until the app's mixer matches HaptiConnect's limiter (ceiling 0.985, gain-reducing), about 15% of driving samples cross our 0.9 knee against HaptiConnect's 10.6%, and 0.9-5.1% flat-top where HaptiConnect never does.",
+    "applied": "2026-09-20 from the maintainer's calibration notes (not published)",
+    "limiter_refit": "2026-09-20: gear_shift.gain 0.63 -> 0.9, refitted THROUGH the app's new output limiter (engine.PeakLimiter, ceiling 0.985, the port of HaptiConnect's own limiter). With the limiter, a shift burst ducks the whole mix, as HaptiConnect's does, so the old gain (fitted against a soft clipper that never ducked) left the burst 1.9 dB weak. Measured on the real full-mix output against HaptiConnect, moving shifts: beamng_drive_1_hc (fitted) -1.93 -> -0.14 dB (n 15), beamng_drive_3_hc valid windows (held out) -1.37 -> +0.17 dB (n 4); the engine's duck under a shift +1.62 -> +0.45 and +1.24 -> +0.07 dB; idle shifts -1.08 -> +0.74 dB (n 17). Full-mix level/Dist: drive 1 +0.16 dB / 1.25 -> +0.09 / 1.15, drive 3 +0.72 / 1.99 -> +0.58 / 1.83. The engine gain needed no refit: its steady line reads +0.02 / -0.07 dB through the limiter. The per-effect scorer (optimize.Session) sums effects linearly and cannot show the ducking, so it reads drive 1 worse (1.55 -> 1.67); BeamNG must be judged on the full mix. Scripts: the maintainer's calibration notes (not published)."
+  },
+  "effects": {
+    "engine": {
+      "curve": [
+        [
+          880.0,
+          17.58,
+          1.0
+        ],
+        [
+          1040.0,
+          17.58,
+          1.0
+        ],
+        [
+          1200.0,
+          20.65,
+          1.0
+        ],
+        [
+          1360.0,
+          22.88,
+          1.0
+        ],
+        [
+          1520.0,
+          24.9,
+          1.0
+        ],
+        [
+          1680.0,
+          27.49,
+          1.0
+        ],
+        [
+          1840.0,
+          31.25,
+          1.0
+        ],
+        [
+          2000.0,
+          33.76,
+          1.0
+        ],
+        [
+          2160.0,
+          35.78,
+          1.0
+        ],
+        [
+          2320.0,
+          38.04,
+          1.0
+        ],
+        [
+          2480.0,
+          41.55,
+          1.0
+        ],
+        [
+          2640.0,
+          44.61,
+          1.0
+        ],
+        [
+          2800.0,
+          46.72,
+          1.0
+        ],
+        [
+          2960.0,
+          48.75,
+          1.0
+        ],
+        [
+          3120.0,
+          51.63,
+          1.0
+        ],
+        [
+          3280.0,
+          55.27,
+          1.0
+        ],
+        [
+          3440.0,
+          57.61,
+          1.0
+        ],
+        [
+          3600.0,
+          59.67,
+          1.0
+        ],
+        [
+          3760.0,
+          62.04,
+          1.0
+        ],
+        [
+          3920.0,
+          65.68,
+          1.0
+        ],
+        [
+          4080.0,
+          68.48,
+          1.0
+        ],
+        [
+          4240.0,
+          70.57,
+          1.0
+        ],
+        [
+          4400.0,
+          72.74,
+          1.0
+        ],
+        [
+          4560.0,
+          75.88,
+          1.0
+        ],
+        [
+          4720.0,
+          79.32,
+          1.0
+        ],
+        [
+          4880.0,
+          81.48,
+          1.0
+        ],
+        [
+          5040.0,
+          83.53,
+          1.0
+        ],
+        [
+          5200.0,
+          86.2,
+          1.0
+        ],
+        [
+          5360.0,
+          89.91,
+          1.0
+        ],
+        [
+          5520.0,
+          92.42,
+          1.0
+        ],
+        [
+          5680.0,
+          94.47,
+          1.0
+        ],
+        [
+          5840.0,
+          96.7,
+          1.0
+        ],
+        [
+          6000.0,
+          100.22,
+          1.0
+        ],
+        [
+          6160.0,
+          103.28,
+          1.0
+        ],
+        [
+          6320.0,
+          105.4,
+          1.0
+        ],
+        [
+          6480.0,
+          107.45,
+          1.0
+        ],
+        [
+          6640.0,
+          110.32,
+          1.0
+        ],
+        [
+          6800.0,
+          113.97,
+          1.0
+        ],
+        [
+          6960.0,
+          116.32,
+          1.0
+        ],
+        [
+          7120.0,
+          118.35,
+          1.0
+        ],
+        [
+          7280.0,
+          120.77,
+          1.0
+        ],
+        [
+          7440.0,
+          124.42,
+          1.0
+        ],
+        [
+          7600.0,
+          127.17,
+          1.0
+        ],
+        [
+          7760.0,
+          129.23,
+          1.0
+        ],
+        [
+          7920.0,
+          131.37,
+          1.0
+        ],
+        [
+          8080.0,
+          132.78,
+          1.0
+        ]
+      ],
+      "amp_throttle": 0.0023,
+      "harmonic": 0.098,
+      "gain": 0.908
+    },
+    "gear_shift": {
+      "template": {
+        "shape": "square",
+        "freq": 34.0,
+        "duration": 0.165,
+        "attack": 0.002,
+        "release": 0.003
+      },
+      "gain": 0.9,
+      "pitch_hz_per_rpm": 0.008333333,
+      "pitched_duration_s": 0.165,
+      "pitch_hz_range": [
+        10.0,
+        120.0
+      ]
+    },
+    "acceleration": {
+      "freq": 60.0,
+      "gain": 0.2488,
+      "curve_long": [
+        [
+          -8,
+          1.3
+        ],
+        [
+          -6,
+          1.15
+        ],
+        [
+          -5,
+          1.0
+        ],
+        [
+          -4.5,
+          0.5
+        ],
+        [
+          -4,
+          0.1
+        ],
+        [
+          -3,
+          0.0
+        ],
+        [
+          8,
+          0.0
+        ],
+        [
+          10,
+          0.45
+        ],
+        [
+          12,
+          1.0
+        ],
+        [
+          15,
+          1.1
+        ],
+        [
+          20,
+          1.3
+        ]
+      ],
+      "curve_lat": [
+        [
+          6,
+          0.0
+        ],
+        [
+          8,
+          0.27
+        ],
+        [
+          10,
+          1.0
+        ],
+        [
+          15,
+          1.1
+        ]
+      ]
+    },
+    "impact": {
+      "template": {
+        "shape": "saw",
+        "freq": 60.0,
+        "duration": 0.017,
+        "attack": 0.002,
+        "release": 0.004
+      },
+      "gain": 1.668,
+      "fixed_amp": true,
+      "threshold": 15.0,
+      "min_hold_s": 0.03,
+      "axes": [
+        "long",
+        "lat"
+      ],
+      "cooldown": 0.3
+    },
+    "suspension": {
+      "template": {
+        "shape": "sine",
+        "freq": 45.0,
+        "duration": 0.05,
+        "attack": 0.002,
+        "decay": 0.014,
+        "harmonics": [
+          0.4,
+          0.45
+        ],
+        "level": 1.0
+      },
+      "gain": 0.7,
+      "fixed_amp": true,
+      "vert_threshold": 12.0,
+      "min_interval": 0.15,
+      "idle_tone_amp": 0.0,
+      "idle_tone_freq": 41.0,
+      "texture_gain": 0.0
+    },
+    "wheel_lock": {
+      "freq": 56.3,
+      "noise_cutoff": 70.0,
+      "gain": 1.0,
+      "binary": true,
+      "threshold": 3.5,
+      "need_brake": true,
+      "tone_amp": 1.0,
+      "noise_amp": 0.0
+    },
+    "wheel_slip": {
+      "gain": 0.0
+    },
+    "abs": {
+      "gain": 0.0
+    },
+    "road": {
+      "gain": 0.0
+    },
+    "shift_indicator": {
+      "gain": 0.0
+    }
+  },
+  "analysis": {
+    "engine": {
+      "amp_throttle": 0.0023,
+      "harmonic": 0.098,
+      "frames": 9776,
+      "freq_range": [
+        17.6,
+        132.9
+      ],
+      "table": [
+        [
+          880.0,
+          17.58,
+          0.8088425099849701,
+          0.27312775330396477,
+          454
+        ],
+        [
+          1040.0,
+          17.58,
+          0.8995410203933716,
+          0.51010101010101,
+          198
+        ],
+        [
+          1200.0,
+          20.65,
+          0.9469727277755737,
+          0.48792270531400966,
+          207
+        ],
+        [
+          1360.0,
+          22.88,
+          0.9706010818481445,
+          0.5025125628140703,
+          199
+        ],
+        [
+          1520.0,
+          24.9,
+          0.9631548523902893,
+          0.5072463768115942,
+          207
+        ],
+        [
+          1680.0,
+          27.49,
+          0.9262685179710388,
+          0.5024875621890548,
+          201
+        ],
+        [
+          1840.0,
+          31.25,
+          0.9268162250518799,
+          0.4900990099009901,
+          202
+        ],
+        [
+          2000.0,
+          33.76,
+          0.9626637101173401,
+          0.5024390243902439,
+          205
+        ],
+        [
+          2160.0,
+          35.78,
+          0.9687177538871765,
+          0.5,
+          196
+        ],
+        [
+          2320.0,
+          38.04,
+          0.941565603017807,
+          0.49523809523809526,
+          210
+        ],
+        [
+          2480.0,
+          41.55,
+          0.9158879518508911,
+          0.5073891625615764,
+          203
+        ],
+        [
+          2640.0,
+          44.61,
+          0.9501995146274567,
+          0.5049019607843137,
+          204
+        ],
+        [
+          2800.0,
+          46.72,
+          0.9686556160449982,
+          0.5,
+          194
+        ],
+        [
+          2960.0,
+          48.75,
+          0.9553463459014893,
+          0.48792270531400966,
+          207
+        ],
+        [
+          3120.0,
+          51.63,
+          0.9169265329837799,
+          0.49514563106796117,
+          206
+        ],
+        [
+          3280.0,
+          55.27,
+          0.9337737560272217,
+          0.5125628140703518,
+          199
+        ],
+        [
+          3440.0,
+          57.61,
+          0.9647578597068787,
+          0.5024390243902439,
+          205
+        ],
+        [
+          3600.0,
+          59.67,
+          0.9637306332588196,
+          0.4950980392156863,
+          204
+        ],
+        [
+          3760.0,
+          62.04,
+          0.9315642714500427,
+          0.505,
+          200
+        ],
+        [
+          3920.0,
+          65.68,
+          0.9159151017665863,
+          0.495,
+          200
+        ],
+        [
+          4080.0,
+          68.48,
+          0.9546046853065491,
+          0.5072463768115942,
+          207
+        ],
+        [
+          4240.0,
+          70.57,
+          0.9668364226818085,
+          0.4900990099009901,
+          202
+        ],
+        [
+          4400.0,
+          72.74,
+          0.9461123645305634,
+          0.504950495049505,
+          202
+        ],
+        [
+          4560.0,
+          75.88,
+          0.9130525290966034,
+          0.5,
+          208
+        ],
+        [
+          4720.0,
+          79.32,
+          0.941646546125412,
+          0.5050505050505051,
+          198
+        ],
+        [
+          4880.0,
+          81.48,
+          0.9654597043991089,
+          0.49019607843137253,
+          204
+        ],
+        [
+          5040.0,
+          83.53,
+          0.9581353664398193,
+          0.5024875621890548,
+          201
+        ],
+        [
+          5200.0,
+          86.2,
+          0.9209993481636047,
+          0.5023696682464455,
+          211
+        ],
+        [
+          5360.0,
+          89.91,
+          0.9249010682106018,
+          0.5025641025641026,
+          195
+        ],
+        [
+          5520.0,
+          92.42,
+          0.9598832130432129,
+          0.4975609756097561,
+          205
+        ],
+        [
+          5680.0,
+          94.47,
+          0.9652089178562164,
+          0.49504950495049505,
+          202
+        ],
+        [
+          5840.0,
+          96.7,
+          0.9373397529125214,
+          0.5049019607843137,
+          204
+        ],
+        [
+          6000.0,
+          100.22,
+          0.9142521023750305,
+          0.5073170731707317,
+          205
+        ],
+        [
+          6160.0,
+          103.28,
+          0.9484940469264984,
+          0.49504950495049505,
+          202
+        ],
+        [
+          6320.0,
+          105.4,
+          0.9656286835670471,
+          0.4925373134328358,
+          201
+        ],
+        [
+          6480.0,
+          107.45,
+          0.9511764049530029,
+          0.5073891625615764,
+          203
+        ],
+        [
+          6640.0,
+          110.32,
+          0.9142178297042847,
+          0.4925373134328358,
+          201
+        ],
+        [
+          6800.0,
+          113.97,
+          0.9328693747520447,
+          0.49760765550239233,
+          209
+        ],
+        [
+          6960.0,
+          116.32,
+          0.9633689522743225,
+          0.507537688442211,
+          199
+        ],
+        [
+          7120.0,
+          118.35,
+          0.9606775641441345,
+          0.5024630541871922,
+          203
+        ],
+        [
+          7280.0,
+          120.77,
+          0.9278422594070435,
+          0.49246231155778897,
+          199
+        ],
+        [
+          7440.0,
+          124.42,
+          0.9155842065811157,
+          0.4975845410628019,
+          207
+        ],
+        [
+          7600.0,
+          127.17,
+          0.9457859992980957,
+          0.5025125628140703,
+          199
+        ],
+        [
+          7760.0,
+          129.23,
+          0.9636083841323853,
+          0.5096153846153846,
+          208
+        ],
+        [
+          7920.0,
+          131.37,
+          0.5487947463989258,
+          0.48717948717948717,
+          195
+        ],
+        [
+          8080.0,
+          132.78,
+          0.5290403962135315,
+          0.5037037037037037,
+          405
+        ]
+      ]
+    },
+    "gear_shift": {
+      "peak": 0.98779296875,
+      "peak_max": 0.999969482421875,
+      "duration": 0.1741875,
+      "count": 20,
+      "template_similarity": 0.972
+    },
+    "acceleration": {
+      "freq": 59.4,
+      "centroid": 61.5,
+      "amp": 0.1115,
+      "amp_p90": 0.9891,
+      "frames": 3199,
+      "amp_per_unit": 0.1087
+    },
+    "impact": {
+      "peak": 0.999969482421875,
+      "peak_max": 0.999969482421875,
+      "duration": 0.02665625,
+      "count": 6,
+      "template_similarity": 0.832
+    },
+    "suspension": {
+      "peak": 0.23931884765625,
+      "peak_max": 0.999969482421875,
+      "duration": 0.14075,
+      "count": 71,
+      "template_similarity": 0.815
+    },
+    "wheel_lock": {
+      "freq": 56.8,
+      "centroid": 56.8,
+      "amp": 0.9734,
+      "amp_p90": 1.0004,
+      "frames": 2404,
+      "amp_per_unit": 1.8837
+    },
+    "probes": {
+      "sampling": "HaptiConnect evaluates telemetry ~12x/s (per audio buffer); pulses shorter than ~170 ms are hit or miss",
+      "collision": "fixed 28 ms hit ~36 Hz; long-axis |g| jump >= ~15 m/s2 held >= 4 frames; vertical ignored; sign ignored; one hit per excursion",
+      "wheel_lock": "on/off 56.3 Hz full-scale tone when wheel speed <= ~45% of car speed under braking",
+      "acceleration": "~60 Hz tone; the 2026-09-10 probe rig put it off below ~9.5 (accel), ~4.5 (braking), ~8.5 (lateral) m/s2 and at full scale within ~2 m/s2 beyond, but in the drive references it plays ~11.5 dB BELOW HaptiConnect's engine line, not at full scale beside it",
+      "suspension": "41.3 Hz bed tone, no constant amplitude: 0.298 with the engine off and the car parked, 0.0100 while the engine alone plays, and at or below its own noise shelf (<= 0.0017) while driving hard - HaptiConnect's mixer ducks it 30-45 dB under the engine (the 2026-09-10 '0.31 while moving' was measured with no engine voice running). Bumps on gforce_vertical (not vertical_2) >= ~12 m/s2 add a fixed pulse; no reference shows one outside HaptiConnect's replay-fault spans",
+      "gear_shift": "one burst per gear change, pitched at rpm/120 Hz, 157-175 ms; at idle (~1375 rpm) HaptiConnect's burst sounds at 11.75 Hz. The '~33 Hz' of the 2026-09-10 probe was that probe running at a constant 4000 rpm (4000/120 = 33.3), not a fixed frequency",
+      "engine": "tone at rpm/60 Hz, amplitude 0.908 (drive 1) / 0.915 (drive 3) at every rpm below the rev limiter, 2nd harmonic 0.10, throttle independent. NO amplitude cut at the limiter: the 2026-09-10 'cut back at limiter' and the 0.53-0.55 rows at 7920/8080 rpm in analysis.engine.table and in the shipped engine.curve are that probe's rpm/max_rpm artefact. At rpm >= ~0.975 x max_rpm HaptiConnect adds a ~60 Hz voice pulsed at exactly 10 Hz and its own limiter ducks the engine under it (line 0.57-0.60 there)"
+    },
+    "note": "analysis.* is the 2026-09-10 calibration-probe output, kept as provenance. Where the 2026-09-20 parity measurements (meta.parity_fit) disagree with it the probes text above was corrected; the numeric tables are left exactly as recorded, including analysis.engine.table's 0.5488/0.5290 rows at 7920/8080 rpm, which the profile's engine.curve no longer follows."
+  }
+}

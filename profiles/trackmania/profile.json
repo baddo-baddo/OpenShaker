@@ -1,0 +1,78 @@
+{
+  "meta": {
+    "created": "2026-09-12",
+    "game": "Trackmania, via the Openplanet Data Sender plugin",
+    "status": "first real drive 2026-09-18 (the maintainer's drive log (not published), Stadium car): effects checked against it and the maintainer's feel; levels still on the calibrated Forza scale",
+    "grip_margin": "loose surfaces only (maintainer's choice 2026-09-18): on tarmac the Stadium car held 90 m/s^2 sideways without letting go, so a load-based warning pulsed through every corner. Limits per surface come from effects.trackmania.GripMarginEffect.LOOSE (first guesses) until `python -m openshaker.tm_grip <drive> --apply` learns them into effects.grip_margin.surfaces",
+    "tuning": "every value is a first guess; `python -m openshaker.tm_tune <session> --apply` calibrates engine range, bumps, impacts, landings, grip limits and surface names from a recorded drive",
+    "acceleration": "off: 30-90 m/s^2 of cornering load kept the g-force rumble near full all the time (maintainer turned it off)",
+    "wheel_slip": "softer (gain 0.3 -> 0.2) and lower (42 -> 32 Hz tone, 45 -> 35 Hz noise); spin_full 2.5 -> 4 softens moderate wheelspin, but a standing burnout is 100 % spin and still reads full. The source grades slides by sideways speed and reports no spin or slide from wheels in the air or settling after a landing",
+    "disabled": "abs, road and shift_indicator have no Trackmania data (surface replaces road); acceleration by choice"
+  },
+  "effects": {
+    "engine": {
+      "gain": 0.175
+    },
+    "gear_shift": {
+      "gain": 0.5
+    },
+    "impact": {
+      "gain": 0.5,
+      "axes": [
+        "lat",
+        "long"
+      ],
+      "threshold": 60.0,
+      "full": 600.0,
+      "cooldown": 0.25
+    },
+    "suspension": {
+      "gain": 0.6
+    },
+    "acceleration": {
+      "gain": 0.12,
+      "ref": 20.0,
+      "enabled": false
+    },
+    "wheel_slip": {
+      "gain": 0.2,
+      "slide_threshold": 0.05,
+      "slide_full": 0.6,
+      "freq": 32.0,
+      "noise_cutoff": 35.0,
+      "spin_full": 4.0
+    },
+    "wheel_lock": {
+      "gain": 0.18,
+      "enabled": true
+    },
+    "abs": {
+      "gain": 0.25,
+      "enabled": false
+    },
+    "road": {
+      "gain": 1.0,
+      "enabled": false
+    },
+    "shift_indicator": {
+      "gain": 1.0,
+      "enabled": false
+    },
+    "grip_margin": {
+      "gain": 0.3,
+      "enabled": true
+    },
+    "surface": {
+      "gain": 0.5,
+      "enabled": true
+    },
+    "landing": {
+      "gain": 0.6,
+      "enabled": true
+    },
+    "boost": {
+      "gain": 0.4,
+      "enabled": true
+    }
+  }
+}

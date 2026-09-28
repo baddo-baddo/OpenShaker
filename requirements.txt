@@ -1,0 +1,6 @@
+# Runtime: the tray app, the window and the command line.
+# Tested with Python 3.13 and numpy 2.5.3, sounddevice 0.5.6, pystray 0.19.5, Pillow 12.3.0.
+numpy>=1.26
+sounddevice>=0.4.6
+pystray>=0.19.4
+pillow>=10.0

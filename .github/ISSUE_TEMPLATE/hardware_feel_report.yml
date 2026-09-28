@@ -1,0 +1,67 @@
+name: Hardware / feel report
+description: Tell us how OpenShaker works and feels with your shaker, amp and games. This is how the "tested" list grows.
+labels: ["feel report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        OpenShaker's effects were tuned by measuring HaptiConnect (with the help of AI) and tested on one setup.
+        Your report helps tune it for everyone - "works great" reports are welcome too!
+  - type: input
+    id: version
+    attributes:
+      label: OpenShaker version
+      placeholder: "1.0.0"
+    validations:
+      required: true
+  - type: input
+    id: shaker
+    attributes:
+      label: Shaker, amplifier and mounting
+      placeholder: "ButtKicker Gamer PRO, BKA-130 amp, under the seat of a GT Omega rig"
+    validations:
+      required: true
+  - type: dropdown
+    id: channel
+    attributes:
+      label: Output channel setting
+      options:
+        - Left (default)
+        - Right
+        - Both
+    validations:
+      required: true
+  - type: dropdown
+    id: games
+    attributes:
+      label: Games you tried
+      multiple: true
+      options:
+        - Forza Motorsport
+        - Forza Horizon 5
+        - Forza Horizon 6
+        - Assetto Corsa EVO
+        - BeamNG.drive
+        - Trackmania
+    validations:
+      required: true
+  - type: dropdown
+    id: overall
+    attributes:
+      label: Overall
+      options:
+        - Works and feels great
+        - Works, but some effects feel off
+        - Partly works
+        - Doesn't work
+    validations:
+      required: true
+  - type: textarea
+    id: effects
+    attributes:
+      label: Effects that feel too strong, too weak or missing
+      description: For example "gear shifts too weak in Forza Horizon 5", "kerbs missing in BeamNG". Slider values you ended up with are very useful.
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?

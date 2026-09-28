@@ -1,0 +1,1328 @@
+"""Tk control panel plus the tray icon it hides into: start/stop, live telemetry, per-effect
+sliders, test tone, save. Closing the window leaves the app running in the notification area."""
+from __future__ import annotations
+
+import json
+import math
+import os
+import queue
+import subprocess
+import sys
+import threading
+import time
+import tkinter as tk
+import traceback
+import webbrowser
+from pathlib import Path
+from tkinter import messagebox, ttk
+
+from . import APP_NAME, FEEDBACK_URL, __version__, config, paths
+from .audio import CHANNEL_CHOICES, AudioOutput, DeviceNotFound, channel_choice
+from .effects import REGISTRY
+from .engine import TestTone
+from .outputs import load_optional_outputs
+from .runtime import Runtime
+from .tray import AVAILABLE as TRAY_AVAILABLE, IMPORT_ERROR as TRAY_IMPORT_ERROR, Tray
+
+PROJECT_DIR = paths.RESOURCE_DIR         # bundled files (icon, profiles); user data is in paths.user_dir()
+LOST_RETRY_SECONDS = 3.0      # an output that stopped playing is usually back as soon as it is plugged in,
+LOST_FAST_WINDOW = 60.0       # so retry that fast for the first minute after it went away
+RETRY_SECONDS = 15.0          # the ButtKicker may still be asleep, or a port still held, at boot
+TONE_SECONDS, TONE_LOW, TONE_HIGH, TONE_AMP = 5.0, 25.0, 70.0, 0.8
+HAPTICS_OFF_MSG = ("Haptics are switched off: nothing plays, and the game ports are free for other programs. "
+                   "Tick Haptics on (here or in the tray menu) to turn them back on.")
+EFFECT_LABELS = {
+    "engine": "Engine RPM",
+    "gear_shift": "Gear shift",
+    "wheel_lock": "Wheel lock (braking)",
+    "wheel_slip": "Wheel slip / slide",
+    "abs": "ABS pulse",
+    "suspension": "Suspension bumps",
+    "road": "Kerbs / rough road",
+    "impact": "Collisions",
+    "acceleration": "G-force rumble",
+    "shift_indicator": "Shift indicator",
+    "grip_margin": "Grip limit warning",
+    "surface": "Surface feel",
+    "landing": "Landings",
+    "boost": "Turbo & reactor boost",
+}
+def parse_percent(text: str) -> float | None:
+    """A typed strength: '85', '85%', ' 85.5 % ' or '85,5'. None when it is not a number."""
+    t = text.strip().rstrip("%").strip().replace(",", ".")
+    try:
+        value = float(t)
+    except ValueError:
+        return None
+    return value if math.isfinite(value) else None
+
+
+def click_to_jump(scale: ttk.Scale, before=None):
+    """Clicking a slider's track puts the value right there, and the knob follows the mouse until the
+    button is released. Windows' ttk would only step toward the click and repeat while held.
+    Grabbing the knob itself drags as usual. `before()` runs first on any mouse button (it closes an
+    open number box, so the number cannot overwrite the slider later). Returns a SliderGrip: whether
+    the slider is held right now, and a call that ends a drag in progress.
+    """
+    follow = {"on": False}
+    grip = SliderGrip(follow)
+
+    def press(event):
+        grip.held = True
+        if before is not None:
+            before()
+        if "slider" in str(scale.identify(event.x, event.y)):
+            return None                          # the knob: ttk's own drag
+        scale.set(scale.get(event.x, event.y))   # set() also runs the slider's command
+        follow["on"] = True
+        return "break"                           # no step-and-repeat toward the click
+
+    def motion(event):
+        if not follow["on"]:
+            return None
+        scale.set(scale.get(event.x, event.y))
+        return "break"
+
+    def release(_event):
+        follow["on"] = False
+        grip.held = False
+
+    def other_button(_event):
+        grip.held = True
+        if before is not None:
+            before()
+        return None                              # ttk's own right/middle-button jump still follows
+
+    scale.bind("<Button-1>", press)
+    scale.bind("<B1-Motion>", motion)
+    scale.bind("<ButtonRelease-1>", release, add="+")
+    for button in (2, 3):
+        scale.bind(f"<Button-{button}>", other_button)
+        scale.bind(f"<ButtonRelease-{button}>", release, add="+")
+    return grip
+
+
+class SliderGrip:
+    """What click_to_jump returns: `held` while a mouse button is down on the slider; calling it
+    ends our jump-and-follow drag."""
+
+    def __init__(self, follow: dict) -> None:
+        self._follow = follow
+        self.held = False
+
+    def __call__(self) -> None:
+        self._follow["on"] = False
+
+
+def end_slider_drags(widget, grips) -> None:
+    """Stop the drags of these sliders - ours and ttk's own (knob, right/middle button) - e.g.
+    before they show another preset. Only call it while one of them is held: ttk's drag state is
+    shared by every slider."""
+    for grip in grips:
+        grip()
+    try:
+        widget.tk.eval("set ::ttk::scale::State(dragging) 0; ttk::CancelRepeat")
+    except tk.TclError:
+        pass
+
+
+def double_click_ms() -> int:
+    try:
+        import ctypes
+        return int(ctypes.windll.user32.GetDoubleClickTime()) or 500
+    except (AttributeError, OSError):
+        return 500
+
+
+class ValueBox:
+    """The number next to a slider. Click it to type a value: Enter, or clicking anywhere else,
+    applies it through `apply(text)`; Esc keeps the old one. `group` ({"open": box}) is shared by
+    the boxes of one window, so only one is open at a time.
+    """
+
+    def __init__(self, parent, textvariable: tk.StringVar, width: int, apply, group: dict) -> None:
+        self.textvariable, self.apply, self.group = textvariable, apply, group
+        self.frame = ttk.Frame(parent)
+        self.label = ttk.Label(self.frame, textvariable=textvariable, style="Tele.TLabel", width=width,
+                               cursor="xterm")
+        self.text = tk.StringVar()
+        self.entry = ttk.Entry(self.frame, width=width, font=("Consolas", 10), textvariable=self.text)
+        self.text.trace_add("write", self._edited)
+        self.edited = False                      # anything typed since the box opened
+        self.label.pack(fill="x")
+        self.label.bind("<Button-1>", self.begin)
+        for key in ("<Return>", "<KP_Enter>"):
+            self.entry.bind(key, lambda _e: self.finish(True, refocus=True))
+        self.entry.bind("<Escape>", lambda _e: self.finish(False, refocus=True))
+        self.entry.bind("<FocusOut>", lambda _e: self.finish(True))
+        self.entry.bind("<Button-1>", self._press)
+        self._opened_at = None
+
+    def _edited(self, *_args) -> None:
+        self.edited = True
+
+    @property
+    def editing(self) -> bool:
+        return self.group.get("open") is self
+
+    def begin(self, event=None):
+        if self.editing:
+            return "break"
+        other = self.group.get("open")
+        if other is not None:
+            other.finish(True)                   # a box left open elsewhere applies what it holds
+        self.group["open"] = self
+        self._opened_at = getattr(event, "time", None)
+        self.label.pack_forget()
+        self.text.set(self.textvariable.get().replace("%", "").strip())
+        self.edited = False
+        self.entry.pack(fill="x")
+        self.entry.focus_set()
+        self._select_all()
+        return "break"
+
+    def _select_all(self) -> None:
+        self.entry.select_range(0, "end")
+        self.entry.icursor("end")
+
+    def _press(self, event):
+        """The second click of a double-click lands on the box that the first one opened: keep the
+        whole number selected, so typing replaces it instead of going into the middle of it."""
+        opened, self._opened_at = self._opened_at, None
+        try:
+            gap = int(event.time) - int(opened) if opened is not None else None
+        except (TypeError, ValueError):
+            gap = None
+        if gap is not None and 0 <= gap <= double_click_ms():
+            self._select_all()
+            return "break"                       # ttk's press would move the caret, its drag drop the selection
+        return None
+
+    def finish(self, apply: bool, refocus: bool = False):
+        if not self.editing:
+            return "break"
+        self.group["open"] = None                # first, so the FocusOut that hiding causes is a no-op
+        text = self.entry.get()
+        self.entry.pack_forget()
+        self.label.pack(fill="x")
+        if refocus:
+            self.frame.winfo_toplevel().focus_set()   # the hidden box must not keep the keyboard
+        if apply and self.edited:                # only what was typed: looking changes nothing
+            self.apply(text)
+        return "break"
+
+
+SOURCE_LABELS = {"forza": "Forza (UDP)", "beamng": "BeamNG (UDP)", "ace": "Assetto Corsa EVO",
+                 "trackmania": "Trackmania (Openplanet)", "demo": "Demo"}
+
+
+class App:
+    DEFAULT_OUTPUT = "(Windows default output)"
+
+    def __init__(self, root: tk.Tk, cfg: dict, config_path: str, hidden: bool = False,
+                 start_haptics: bool = False, use_tray: bool = True, ask_startup: bool = True) -> None:
+        self.root = root
+        self.cfg = cfg
+        self.config_path = config_path
+        self.ask_startup = ask_startup
+        self._device_warned = False
+        self.rt: Runtime | None = None
+        self._tone_thread: threading.Thread | None = None
+        self.tray: Tray | None = None
+        self._ui_queue: queue.Queue = queue.Queue()
+        self.listener = None
+        self.presets = config.list_presets(cfg)
+        self.preset_key = cfg.get("_preset") or config.preset_key(cfg, cfg.get("profile"))
+        self.active_preset = self.preset_key
+        self._preset_bases: dict = {}
+        self._save_job = None
+        self.start_error = ""
+        self._retry_at = 0.0
+        self._keep_running = False     # set by the first start(); until then poll() starts nothing (--no-start)
+        self._lost_at = -1e9
+        self._last_status: dict | None = None
+        self._tray_tick = 0
+        self._tray_lines = {"state": "Haptics: stopped", "game": "Game: -", "profile": "Profile: -",
+                            "output": "Output: -", "error": ""}
+        # the Haptics on switch (window and tray): off stops everything and stays off across launches;
+        # --no-start turns it off for this launch only. A plain bool: pystray's thread reads it.
+        self._no_start = not start_haptics
+        self.haptics_on = cfg.get("haptics_on", True) is not False and start_haptics
+        self._unsaved_switch = ""                # set when config.json refused the switch (see _say_unsaved_switch)
+        self._save_error = ""
+        self._saved_switch = cfg.get("haptics_on", True) is not False    # what config.json says right now
+        self._boxes: dict = {"open": None}       # the number box being typed into, if any
+        # optional outputs (outputs.py): absent package = nothing here at all
+        try:
+            found, problems = load_optional_outputs()           # guards itself; this guards the guard
+            self.outputs = list(found)
+        except (Exception, SystemExit) as exc:
+            self.outputs, problems = [], [f"optional outputs: {type(exc).__name__}: {exc}"]
+        self._output_notes = [f"Could not load {p}" for p in problems]   # shown once the message line exists
+        self.output_rows: dict = {}
+        self._strength_grips: list = []          # the strength sliders' grips (see end_slider_drags)
+        self._dropped_typing = False
+
+        root.title(f"{APP_NAME} {__version__}")
+        root.minsize(560, 620)
+        ico = PROJECT_DIR / "openshaker.ico"
+        if ico.exists():
+            try:
+                root.iconbitmap(str(ico))
+            except tk.TclError:
+                pass
+        style = ttk.Style()
+        try:
+            style.theme_use("vista")
+        except tk.TclError:
+            pass
+        style.configure("Big.TButton", font=("Segoe UI", 11, "bold"), padding=8)
+        style.configure("Big.TLabel", font=("Segoe UI", 11, "bold"))
+        style.configure("Big.TCheckbutton", font=("Segoe UI", 11, "bold"))
+        style.configure("Status.TLabel", font=("Segoe UI", 10))
+        style.configure("Tele.TLabel", font=("Consolas", 10))
+        style.configure("Head.TLabel", font=("Segoe UI", 10, "bold"))
+
+        outer = ttk.Frame(root, padding=12)
+        outer.pack(fill="both", expand=True)
+
+        # -- top: the haptics switch / mode ------------------------------------------------
+        top = ttk.Frame(outer)
+        top.pack(fill="x")
+        self.haptics_var = tk.BooleanVar(value=self.haptics_on)
+        self.haptics_box = ttk.Checkbutton(top, text="Haptics on", style="Big.TCheckbutton",
+                                           variable=self.haptics_var,
+                                           command=lambda: self.set_haptics(self.haptics_var.get()))
+        self.haptics_box.pack(side="left")
+        self.mode = tk.StringVar(value="game")
+        self.mode_buttons = {}
+        for value, text, pad in (("game", "Games", 0), ("demo", "Demo", (0, 6))):
+            self.mode_buttons[value] = ttk.Radiobutton(top, text=text, variable=self.mode, value=value,
+                                                       command=self._restart_if_on)
+            self.mode_buttons[value].pack(side="right", padx=pad)
+        pre = ttk.Frame(outer)
+        pre.pack(fill="x", pady=(10, 0))
+        ttk.Label(pre, text="Preset", style="Head.TLabel").pack(side="left")
+        self.preset_var = tk.StringVar()
+        self.preset_box = ttk.Combobox(pre, textvariable=self.preset_var, state="readonly", width=32,
+                                       values=[e["label"] for e in self.presets])
+        self.preset_box.pack(side="left", padx=8)
+        self.preset_box.bind("<<ComboboxSelected>>", self._preset_picked)
+        self.preset_note = tk.StringVar(value="")
+        ttk.Label(pre, textvariable=self.preset_note, foreground="#555").pack(side="left")
+
+        opts = ttk.Frame(outer)
+        opts.pack(fill="x", pady=(8, 0))
+        self.startup_var = tk.BooleanVar(value=self.windows_startup_enabled())
+        ttk.Checkbutton(opts, text="Start with Windows (in the tray)", variable=self.startup_var,
+                        command=self.toggle_windows_startup).pack(side="left")
+
+        self.status_var = tk.StringVar(value="Stopped")
+        ttk.Label(outer, textvariable=self.status_var, style="Status.TLabel").pack(anchor="w", pady=(8, 0))
+
+        # -- telemetry --------------------------------------------------------------------
+        tele = ttk.LabelFrame(outer, text="Telemetry", padding=8)
+        tele.pack(fill="x", pady=(10, 0))
+        self.src_var = tk.StringVar(value="no game detected")
+        ttk.Label(tele, textvariable=self.src_var, style="Head.TLabel").grid(row=0, column=0, columnspan=4, sticky="w")
+        self.tele_vars = {}
+        fields = [("RPM", "rpm"), ("Gear", "gear"), ("Speed", "speed"), ("Throttle", "thr"),
+                  ("Brake", "brk"), ("G long", "glong"), ("G lat", "glat"), ("G vert", "gvert")]
+        for i, (label, key) in enumerate(fields):
+            r, c = 1 + i // 4, (i % 4)
+            cell = ttk.Frame(tele)
+            cell.grid(row=r, column=c, sticky="w", padx=(0, 18), pady=2)
+            ttk.Label(cell, text=label + ":").pack(side="left")
+            v = tk.StringVar(value="-")
+            self.tele_vars[key] = v
+            ttk.Label(cell, textvariable=v, style="Tele.TLabel", width=11).pack(side="left")
+        self.sources_var = tk.StringVar(value="")
+        ttk.Label(tele, textvariable=self.sources_var, foreground="#555").grid(row=3, column=0, columnspan=4, sticky="w", pady=(6, 0))
+
+        # -- output -------------------------------------------------------------------------
+        out = ttk.LabelFrame(outer, text="Output", padding=8)
+        out.pack(fill="x", pady=(10, 0))
+        ttk.Label(out, text="Level").grid(row=0, column=0, sticky="w")
+        self.level_bar = ttk.Progressbar(out, length=260, maximum=60.0)
+        self.level_bar.grid(row=0, column=1, sticky="we", padx=8)
+        self.level_var = tk.StringVar(value="-inf dB")
+        ttk.Label(out, textvariable=self.level_var, style="Tele.TLabel", width=10).grid(row=0, column=2, sticky="w")
+        ttk.Label(out, text="Master").grid(row=1, column=0, sticky="w", pady=(6, 0))   # 1.00 = calibrated
+        self.master_var = tk.DoubleVar(value=float(cfg["audio"]["master_gain"]))
+        self.master_scale = ttk.Scale(out, from_=0.0, to=1.0, variable=self.master_var,
+                                      command=self._master_changed)
+        self.master_scale.grid(row=1, column=1, sticky="we", padx=8, pady=(6, 0))
+        click_to_jump(self.master_scale, before=self._close_box)
+        for event, step in (("<<PrevChar>>", -0.01), ("<<NextChar>>", 0.01), ("<<PrevLine>>", -0.01),
+                            ("<<NextLine>>", 0.01), ("<<PrevWord>>", -0.10), ("<<NextWord>>", 0.10),
+                            ("<<PrevPara>>", -0.10), ("<<NextPara>>", 0.10)):
+            # ttk steps a slider by 1 (Ctrl: 10) - Master's whole 0..1 range - so step in percent
+            self.master_scale.bind(event, lambda _e, d=step: self._master_step(d))
+        self.master_lbl = tk.StringVar(value=f"{self.master_var.get() * 100:.0f}%")
+        self.master_box = ValueBox(out, self.master_lbl, 10, self._type_master, self._boxes)
+        self.master_box.frame.grid(row=1, column=2, sticky="w", pady=(6, 0))
+        ttk.Label(out, text="Device").grid(row=2, column=0, sticky="w", pady=(6, 0))
+        self.device_var = tk.StringVar(value=self._device_label(cfg["audio"].get("device", "")))
+        self.device_box = ttk.Combobox(out, textvariable=self.device_var, state="readonly",
+                                       postcommand=self._fill_devices)
+        self.device_box.grid(row=2, column=1, columnspan=2, sticky="we", padx=8, pady=(6, 0))
+        self.device_box.bind("<<ComboboxSelected>>", self._device_picked)
+        self._place_output_rows(out, 3)
+        out.columnconfigure(1, weight=1)
+
+        # -- effects ----------------------------------------------------------------------------
+        eff = ttk.LabelFrame(outer, text="Effects (enable, strength as % of the calibrated level, live level)",
+                             padding=8)
+        eff.pack(fill="both", expand=True, pady=(10, 0))
+        self.effect_vars = {}
+        self.effect_bars = {}
+        self.effect_scales = {}
+        self.strength_boxes = {}
+        for row, name in enumerate(REGISTRY):
+            e_cfg = cfg["effects"].get(name, {})
+            en = tk.BooleanVar(value=bool(e_cfg.get("enabled", True)))
+            trim = tk.DoubleVar(value=float(e_cfg.get("trim", 1.0)) * 100.0)
+            lbl = tk.StringVar(value=f"{trim.get():3.0f}%")
+            self.effect_vars[name] = (en, trim, lbl)
+            ttk.Checkbutton(eff, text=EFFECT_LABELS.get(name, name), variable=en,
+                            command=lambda n=name: self._effect_changed(n)).grid(row=row, column=0, sticky="w", pady=1)
+            scale = ttk.Scale(eff, from_=0.0, to=200.0, variable=trim,
+                              command=lambda _v, n=name: self._slider_moved(n))
+            scale.grid(row=row, column=1, sticky="we", padx=8)
+            self._strength_grips.append(click_to_jump(scale, before=self._close_box))
+            self.effect_scales[name] = scale
+            box = ValueBox(eff, lbl, 5, lambda text, n=name: self._type_strength(n, text), self._boxes)
+            box.frame.grid(row=row, column=2, sticky="w")
+            self.strength_boxes[name] = box
+            bar = ttk.Progressbar(eff, length=90, maximum=1.0)
+            bar.grid(row=row, column=3, sticky="w", padx=(8, 0))
+            self.effect_bars[name] = bar
+        self.hint_label = ttk.Label(eff, foreground="#555", wraplength=520,
+                                    text="Click a slider to jump there, or click a number to type one "
+                                         "(Enter or clicking elsewhere applies it, Esc cancels).")
+        self.hint_label.grid(row=len(REGISTRY), column=0, columnspan=4, sticky="w", pady=(6, 0))
+        eff.columnconfigure(1, weight=1)
+
+        # -- bottom buttons -----------------------------------------------------------------------
+        bottom = ttk.Frame(outer)
+        bottom.pack(fill="x", pady=(10, 0))
+        ttk.Button(bottom, text="Test tone", command=self.test_tone).pack(side="left")
+        self.restart_button = ttk.Button(bottom, text="Restart haptics", command=self.restart_haptics)
+        self.restart_button.pack(side="left", padx=8)
+        ttk.Button(bottom, text="Reset preset to calibrated", command=self.reset_to_profile).pack(side="right")
+        ttk.Button(bottom, text="Advanced...", command=self.advanced).pack(side="right", padx=8)
+        msg = "Strengths save themselves. A preset becomes active when its game is detected."
+        self.msg_var = tk.StringVar(value=msg)
+        ttk.Label(outer, textvariable=self.msg_var, foreground="#555", wraplength=540).pack(anchor="w", pady=(8, 0))
+
+        self._select_preset(self.preset_key)
+        if cfg.pop("_resave", False):
+            self._save_now()                      # config.load dropped copies of defaults; keep the file slim
+        self._setup_windows_startup(hidden)
+        self.tray = Tray(self, ico) if use_tray else None
+        if self.tray is not None and self.tray.active:
+            self.tray.start()
+        elif use_tray and not TRAY_AVAILABLE:
+            self.msg_var.set(f"{msg}   (no tray icon: {TRAY_IMPORT_ERROR})")
+
+        root.protocol("WM_DELETE_WINDOW", self.on_close)
+        root.bind("<Button-1>", self._click_away, add="+")   # clicking elsewhere applies an open number box
+        root.after(200, self.poll)
+        if hidden and self.tray is not None and self.tray.active:
+            root.withdraw()                       # started by Windows: live in the tray only
+        elif hidden:
+            root.iconify()                        # no tray icon to hide into; at least stay out of the way
+        if self.haptics_on:
+            root.after(400, self._start_at_launch)
+        elif self._no_start:
+            self.msg_var.set('Haptics are off (started with --no-start), so the calibration tools can use the game '
+                             'ports. Haptics on (or Restart haptics) starts them.')
+        else:
+            self.msg_var.set(HAPTICS_OFF_MSG)
+
+    # -- actions ---------------------------------------------------------------------------------
+    def _start_at_launch(self) -> None:
+        if self.haptics_on:                      # not if the switch went off in the meantime
+            self.start()
+
+    def start(self, quiet: bool = True) -> None:
+        """Bring the haptics up, and the Haptics on switch with them. Called on launch, by the switch, by
+        Restart haptics and by the retry in poll()."""
+        self._set_switch(True)
+        self._keep_running = True                # from now on poll() brings them back after a failure
+        if self.rt is not None and self.rt.running:
+            return
+        self.rt = Runtime(self.cfg, demo=(self.mode.get() == "demo"), outputs=self.outputs)
+        try:
+            self.rt.start()
+        except Exception as exc:
+            self.rt = None
+            self.start_error = f"{type(exc).__name__}: {exc}"
+            self._retry_at = time.monotonic() + self._retry_interval()
+            if isinstance(exc, DeviceNotFound):
+                self.start_error = f"{exc} - pick your shaker under Output > Device"
+                self._notify_device_missing()
+            if quiet:
+                self.msg_var.set(f"Could not start haptics: {self.start_error} - retrying.")
+            else:
+                self.report_error("Could not start haptics", self.start_error)
+            return
+        self.start_error = ""
+        self.msg_var.set("Running. Drive in the game; strengths can be changed live.")
+        self._sync_preset_note()
+
+    def _stop_runtime(self) -> None:
+        """Internal: the only way to leave the haptics stopped is the Haptics on switch (set_haptics)."""
+        if self.rt is not None:
+            self.rt.stop()
+            self.rt = None
+        self.src_var.set("no game detected")      # nothing the stopped runtime said may linger
+        self.sources_var.set("")
+        for v in self.tele_vars.values():
+            v.set("-")
+        self.level_bar["value"] = 0
+        self.level_var.set("-inf dB")
+        for bar in self.effect_bars.values():
+            bar["value"] = 0
+
+    def set_haptics(self, on: bool) -> None:
+        """The Haptics on switch, in the window and the tray menu. Off stops everything the haptics run -
+        the shaker's audio stream, the game ports (free for other programs), the optional outputs - and
+        they stay off, across launches too, until the switch (or Restart haptics) turns them on again."""
+        if on:
+            self.start(quiet=False)
+        else:
+            self._set_switch(False)
+            self._keep_running = False           # poll() must not bring them back
+            self._stop_runtime()
+            self.start_error = ""
+            self.msg_var.set(HAPTICS_OFF_MSG)
+        self._sync_preset_note()
+        self._refresh()
+        self._refresh_tray(force=True)
+        self._say_unsaved_switch()
+
+    def toggle_haptics(self) -> None:
+        """The tray's Haptics on item (run on the Tk thread)."""
+        self.set_haptics(not self.haptics_on)
+
+    def _set_switch(self, on: bool) -> None:
+        """Record the switch: the window's box, the tray's tick and config.json (which holds it only while off)."""
+        changed = on != self.haptics_on
+        self.haptics_on = on
+        self._no_start = False                   # from now on it is the user's choice, not the launch flag's
+        if bool(self.haptics_var.get()) != on:
+            self.haptics_var.set(on)
+        if (self.cfg.get("haptics_on", True) is not False) != on:
+            self.cfg["haptics_on"] = on
+            if not self._save_now() and self._saved_switch != on:
+                self._unsaved_switch = (f"The Haptics on switch could not be saved ({self._save_error}), so after "
+                                        f"a restart the haptics will be {'on' if self._saved_switch else 'off'} again.")
+        if changed and self.tray is not None:
+            self.tray.update_menu()              # pystray reads the tick only when it builds the menu
+
+    def _say_unsaved_switch(self) -> None:
+        """A switch that could not be saved holds only until the app ends: say so after the switch's own
+        message (which would otherwise cover the save error), and in the tray when the window is hidden."""
+        note, self._unsaved_switch = self._unsaved_switch, ""
+        if not note:
+            return
+        self.msg_var.set(f"{self.msg_var.get()}  {note}")
+        if not self.window_visible() and self.tray is not None:
+            self.tray.notify(note)
+
+    def restart_haptics(self) -> None:
+        """Restart haptics (window and tray): a fresh runtime. While they are switched off it turns them on."""
+        self._stop_runtime()
+        self.start(quiet=False)
+        self._say_unsaved_switch()
+
+    def _restart_if_on(self) -> None:
+        """Pick up a change that needs a fresh runtime - demo mode, the device, ports - now, or, while the
+        haptics are switched off, when they are switched on again."""
+        if self.haptics_on:
+            self.restart_haptics()
+
+    def test_tone(self) -> None:
+        """Sweep the ButtKicker's band so you can feel whether the chain works end to end.
+
+        It is mixed into the stream that is already playing. Opening a second stream fails
+        outright when the device is held exclusively, which is precisely when someone reaches
+        for the test tone.
+        """
+        if self.rt is not None and self.rt.play_test_tone(TONE_SECONDS, TONE_LOW, TONE_HIGH, TONE_AMP):
+            self.msg_var.set(f"Test tone: {TONE_LOW:.0f}-{TONE_HIGH:.0f} Hz sweep, {TONE_SECONDS:.0f} s, "
+                             f"through the running output.")
+            return
+        if self._tone_thread is not None and self._tone_thread.is_alive():
+            return
+
+        def say(text: str) -> None:
+            self.run_on_ui(lambda: self.msg_var.set(text))      # this runs off the Tk thread
+
+        def worker() -> None:
+            """Haptics are down, so there is no stream to mix into: make a short-lived one."""
+            a = self.cfg["audio"]
+            audio = AudioOutput(device_substr=a["device"], api_pref=a["api"], samplerate=a["samplerate"],
+                                blocksize=a["blocksize"], channels=a["channels"])
+            try:
+                sr = audio.resolve()
+                tone = TestTone(sr, TONE_SECONDS, TONE_LOW, TONE_HIGH, TONE_AMP)
+                audio.render = tone.block
+                audio.start()
+                say(f"Test tone: {TONE_LOW:.0f}-{TONE_HIGH:.0f} Hz sweep on {audio.device_name}")
+                time.sleep(TONE_SECONDS + 0.2)
+                audio.stop()
+                say(f"Test tone done ({audio.device_name}, {audio.xruns} dropouts).")
+            except Exception as exc:
+                say(f"Test tone failed: {type(exc).__name__}: {exc}")
+
+        self._tone_thread = threading.Thread(target=worker, daemon=True)
+        self._tone_thread.start()
+
+    def open_folder(self) -> None:
+        subprocess.Popen(["explorer", str(paths.user_dir())])      # settings and logs
+
+    def open_feedback(self) -> None:
+        """The tray's "Send feedback / report a bug": the project's issue forms in the default browser
+        (webbrowser -> os.startfile on Windows, no shell). Nothing is attached or sent - no log, no system
+        data; people choose what to paste into the form."""
+        try:
+            opened = webbrowser.open(FEEDBACK_URL)
+        except Exception:
+            opened = False
+        if not opened:
+            self.msg_var.set(f"Could not open a browser. To report a bug or send feedback, go to {FEEDBACK_URL}")
+
+    # -- output device ----------------------------------------------------------------------
+    def _device_label(self, name: str) -> str:
+        return name if str(name or "").strip() else self.DEFAULT_OUTPUT
+
+    def _fill_devices(self) -> None:
+        """Every output on a shared host API, read afresh each time the list opens."""
+        try:
+            names = AudioOutput.shared_outputs()
+        except Exception as exc:
+            names = []
+            self.msg_var.set(f"Could not list the audio outputs: {type(exc).__name__}: {exc}")
+        values = [self.DEFAULT_OUTPUT] + names
+        current = str(self.cfg["audio"].get("device", "") or "")
+        if current and current not in values:
+            values.insert(1, current)            # a saved device that is unplugged right now stays visible
+        self.device_box["values"] = values
+
+    def _device_picked(self, _event=None) -> None:
+        label = self.device_var.get()
+        name = "" if label == self.DEFAULT_OUTPUT else label
+        if name == str(self.cfg["audio"].get("device", "") or ""):
+            return
+        self.cfg["audio"]["device"] = name
+        self._device_warned = False
+        self._save_now()
+        self._restart_if_on()
+        if self.is_running():
+            self.msg_var.set(f"Output: {label}. Start with the amplifier turned down and use Test tone.")
+
+    # -- presets -------------------------------------------------------------------------------
+    def _preset(self, key: str) -> dict:
+        for entry in self.presets:
+            if entry["key"] == key:
+                return entry
+        return self.presets[0] if self.presets else {"key": key, "label": key, "profile": None}
+
+    def _bases(self, key: str) -> tuple[dict, dict]:
+        """(gains, enabled) a preset's profile was calibrated at - what 100% means for it.
+
+        Read straight from the profile file, so a preset can be edited while a different one is
+        playing, or with no game running at all.
+        """
+        if key not in self._preset_bases:
+            probe = config.load(None)
+            try:
+                config.apply_profile(probe, config.resolve_profile(self.cfg, self._preset(key)["profile"]),
+                                     keep_user={})
+            except Exception:
+                pass
+            self._preset_bases[key] = (probe.get("_base_gains", {}), probe.get("_base_enabled", {}))
+        return self._preset_bases[key]
+
+    def _select_preset(self, key: str) -> None:
+        """Show a preset's saved strengths, whether or not it is the one currently playing."""
+        if key != self.preset_key:
+            box = self._boxes.get("open")
+            if box is not None and box is not self.master_box:
+                self._dropped_typing = box.edited
+                self._close_box(apply=False)     # a half-typed strength belongs to the preset it was typed for
+            if any(grip.held for grip in self._strength_grips):
+                end_slider_drags(self.root, self._strength_grips)   # a held strength drag must not write here
+        self.preset_key = key
+        entry = self._preset(key)
+        self.preset_var.set(entry["label"])
+        stored = (config.preset_settings(self.cfg, key).get("effects") or {})
+        gains, enabled = self._bases(key)
+        for name, (en, trim, lbl) in self.effect_vars.items():
+            params = stored.get(name) or {}
+            en.set(bool(params.get("enabled", enabled.get(name, True))))
+            trim.set(round(float(params.get("trim", 1.0)) * 100.0, 1))
+            lbl.set(f"{float(trim.get()):3.0f}%")
+        self._sync_preset_note()
+
+    def _sync_preset_note(self) -> None:
+        if self.preset_key == self.active_preset:
+            live = "active" if self.is_running() else "loaded"
+            self.preset_note.set(f"({live} - editing changes what you feel now)")
+        else:
+            self.preset_note.set(f"(editing; {self._preset(self.active_preset)['label']} is active)")
+
+    def _preset_picked(self, _event=None) -> None:
+        self._close_box()                        # picked by hand (even the mouse wheel): apply the typing first
+        label = self.preset_var.get()
+        for entry in self.presets:
+            if entry["label"] == label:
+                self._select_preset(entry["key"])
+                break
+        if self.preset_key != self.active_preset and not self.is_running():
+            # nothing is playing, so make the chosen one the one that will play
+            self._make_active(self.preset_key)
+
+    def _make_active(self, key: str) -> None:
+        entry = self._preset(key)
+        path = str(config.resolve_profile(self.cfg, entry["profile"]))
+        try:
+            config.apply_profile(self.cfg, path, preset=key)
+        except Exception as exc:
+            self.msg_var.set(f"Could not load {entry['label']}: {type(exc).__name__}: {exc}")
+            return
+        self.cfg["profile"] = path
+        self.active_preset = key
+        self._sync_preset_note()
+
+    def _save_soon(self) -> None:
+        """Strengths save themselves a moment after you stop dragging."""
+        if self._save_job is not None:
+            try:
+                self.root.after_cancel(self._save_job)
+            except Exception:
+                pass
+        self._save_job = self.root.after(800, self._save_now)
+
+    def _save_now(self) -> bool:
+        self._save_job = None
+        self.cfg["audio"]["master_gain"] = float(self.master_var.get())
+        try:
+            config.save_user(self.cfg, self.config_path)
+        except OSError as exc:
+            self._save_error = str(exc)
+            self.msg_var.set(f"Could not save settings: {exc}")
+            return False
+        self._saved_switch = self.cfg.get("haptics_on", True) is not False
+        return True
+
+    def reset_to_profile(self) -> None:
+        """Put the preset being edited back to the level it ships with."""
+        self._close_box(apply=False)
+        _gains, enabled = self._bases(self.preset_key)
+        for name, (en, trim, _lbl) in self.effect_vars.items():
+            en.set(bool(enabled.get(name, True)))
+            trim.set(100.0)
+            self._effect_changed(name)
+        self.msg_var.set(f"{self._preset(self.preset_key)['label']}: back to 100% (the shipped level).")
+
+    # -- advanced settings (ports and scales that used to be config.json only) ----------------
+    ADVANCED_FIELDS = [
+        ("Forza / Horizon Data Out port", ("sources", "forza", "port"), int),
+        ("BeamNG OutGauge port", ("sources", "beamng", "port"), int),
+        ("BeamNG Motion Sim port (0 = same as OutGauge)", ("sources", "beamng", "motion_port"), int),
+        ("ACE poll rate (Hz)", ("sources", "ace", "poll_hz"), float),
+        ("ACE suspension travel scale (m)", ("sources", "ace", "susp_scale_m"), float),
+        ("Trackmania Data Sender port", ("sources", "trackmania", "port"), int),
+        ("Forza listen address (0.0.0.0 also takes an Xbox or another PC)", ("sources", "forza", "host"), str),
+        ("Output channel", ("audio", "channels"), "channel"),
+    ]
+
+    def _cfg_at(self, path: tuple):
+        node = self.cfg
+        for key in path[:-1]:
+            node = node.setdefault(key, {})
+        return node, path[-1]
+
+    def advanced(self) -> None:
+        win = tk.Toplevel(self.root)
+        win.title("Advanced settings")
+        win.transient(self.root)
+        win.resizable(False, False)
+        frame = ttk.Frame(win, padding=12)
+        frame.pack(fill="both", expand=True)
+        entries = []
+        for row, (label, path, cast) in enumerate(self.ADVANCED_FIELDS):
+            node, key = self._cfg_at(path)
+            ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", pady=3)
+            if cast == "channel":
+                var = tk.StringVar(value=channel_choice(node.get(key)))
+                ttk.Combobox(frame, textvariable=var, state="readonly", width=22,
+                             values=list(CHANNEL_CHOICES)).grid(row=row, column=1, sticky="we", padx=(12, 0))
+            else:
+                var = tk.StringVar(value=str(node.get(key, "")))
+                ttk.Entry(frame, textvariable=var, width=24).grid(row=row, column=1, sticky="we", padx=(12, 0))
+            entries.append((path, cast, var))
+        last = len(self.ADVANCED_FIELDS)
+        ttk.Label(frame, text="OK saves these; haptics that are on restart to use them.",
+                  foreground="#555").grid(row=last, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        btns = ttk.Frame(frame)
+        btns.grid(row=last + 1, column=0, columnspan=2, sticky="e", pady=(10, 0))
+
+        def apply() -> None:
+            try:
+                values = []
+                for path, cast, var in entries:
+                    node, key = self._cfg_at(path)
+                    raw = var.get().strip()
+                    if cast == "channel":
+                        value = list(CHANNEL_CHOICES.get(raw, node.get(key) or [0]))
+                    else:
+                        value = cast(raw)
+                    values.append(((node, key), value))
+            except ValueError as exc:
+                messagebox.showerror("Advanced settings", f"Not a number: {exc}", parent=win)
+                return
+            win.destroy()
+            self._apply_advanced(values)
+
+        ttk.Button(btns, text="OK", command=apply).pack(side="right")
+        ttk.Button(btns, text="Cancel", command=win.destroy).pack(side="right", padx=(0, 8))
+        win.grab_set()
+
+    def _apply_advanced(self, values: list) -> None:
+        """Advanced OK, after its fields were checked: [((node, key), value), ...]."""
+        for (node, key), value in values:
+            node[key] = value
+        self._save_now()
+        self._restart_if_on()
+        self.msg_var.set("Advanced settings saved and applied." if self.haptics_on else
+                         "Advanced settings saved; they apply when the haptics are switched on.")
+
+    # -- live tuning --------------------------------------------------------------------------------
+    def _close_box(self, apply: bool = True) -> None:
+        box = self._boxes.get("open")
+        if box is not None:
+            box.finish(apply)
+
+    def _click_away(self, event) -> None:
+        box = self._boxes.get("open")
+        if box is not None and event.widget is not box.entry:
+            box.finish(True)
+
+    def _slider_moved(self, name: str) -> None:
+        """Strength sliders move in whole percent, like the number next to them."""
+        _en, trim, _lbl = self.effect_vars[name]
+        pct = round(float(trim.get()))
+        if pct != float(trim.get()):
+            trim.set(pct)
+        self._effect_changed(name)
+
+    def _type_strength(self, name: str, text: str) -> bool:
+        value = parse_percent(text)
+        if value is None:
+            if text.strip():
+                self.msg_var.set(f"'{text.strip()}' is not a number: type a strength from 0 to 200 (%).")
+            return False
+        pct = round(min(max(value, 0.0), 200.0))
+        if not 0.0 <= value <= 200.0:
+            self.msg_var.set(f"Strengths go from 0 to 200 %, so {EFFECT_LABELS.get(name, name)} is at {pct} %.")
+        _en, trim, _lbl = self.effect_vars[name]
+        trim.set(pct)
+        self._effect_changed(name)
+        return True
+
+    def _type_master(self, text: str) -> bool:
+        value = parse_percent(text)
+        if value is None:
+            if text.strip():
+                self.msg_var.set(f"'{text.strip()}' is not a number: type the master level from 0 to 100 (%).")
+            return False
+        pct = round(min(max(value, 0.0), 100.0))
+        if not 0.0 <= value <= 100.0:
+            self.msg_var.set(f"Master goes from 0 to 100 %, so it is at {pct} %.")
+        self.master_var.set(pct / 100.0)
+        self._master_changed(None)
+        return True
+
+    def _master_step(self, step: float):
+        self.master_scale.set(float(self.master_var.get()) + step)   # clamps, then _master_changed snaps
+        return "break"
+
+    def _master_changed(self, _v) -> None:
+        g = round(float(self.master_var.get()), 2)      # whole percent, like the number next to it
+        if g != float(self.master_var.get()):
+            self.master_var.set(g)
+        self.master_lbl.set(f"{g * 100:.0f}%")
+        self.cfg["audio"]["master_gain"] = g
+        if self.rt is not None:
+            self.rt.set_master(g)
+        self._save_soon()                        # a lowered master must still be lowered after a restart
+
+    def _effect_changed(self, name: str) -> None:
+        """Edits belong to the preset on screen; the audio only moves if that preset is playing."""
+        en, trim, lbl = self.effect_vars[name]
+        t = round(float(trim.get()) / 100.0, 4)
+        enabled = bool(en.get())
+        lbl.set(f"{float(trim.get()):3.0f}%")
+        _gains, profile_on = self._bases(self.preset_key)
+        config.set_preset_effect(self.cfg, self.preset_key, name, trim=t, enabled=enabled,
+                                 profile_enabled=profile_on.get(name))   # a switch equal to the profile's follows it
+        if self.preset_key == self.active_preset:
+            self.cfg["effects"].setdefault(name, {})["enabled"] = enabled
+            if self.rt is not None:
+                self.rt.set_trim(name, t)                  # profile gain * trim, applied live
+                self.rt.set_effect(name, enabled=enabled)
+            else:
+                gains, _ = self._bases(self.preset_key)
+                e = self.cfg["effects"].setdefault(name, {})
+                e["trim"], e["gain"] = t, gains.get(name, 1.0) * t
+        self._save_soon()
+
+    # -- polling ---------------------------------------------------------------------------------------
+    def poll(self) -> None:
+        try:
+            self._drain_ui_queue()
+            if self.rt is not None and self.rt.running and self.rt.audio_lost():
+                self._audio_lost()
+            if self._keep_running and not self.is_running() and time.monotonic() >= self._retry_at:
+                self._retry_at = time.monotonic() + self._retry_interval()
+                self.start()                  # the shaker may have been asleep when Windows booted
+            self._refresh()
+            self._refresh_tray()
+        except Exception:
+            traceback.print_exc()
+        self.root.after(150, self.poll)
+
+    def _refresh_tray(self, force: bool = False) -> None:
+        """Once a second (or now, when forced), recompute what the tray menu and tooltip say."""
+        self._tray_tick = (self._tray_tick + 1) % 7
+        if (self._tray_tick and not force) or self.tray is None or not self.tray.active:
+            return
+        st, lines = self._last_status, dict(self._tray_lines)
+        if st is None:
+            starting = not self.start_error
+            lines.update({"state": "Haptics: starting..." if starting else "Haptics: NOT running",
+                          "game": "Game: -", "profile": "Profile: -", "output": "Output: -",
+                          "error": "" if starting else f"Problem: {self.start_error}"})
+            title = f"{APP_NAME} - starting" if starting else f"{APP_NAME} - NOT running"
+            if not self.haptics_on:
+                lines["state"] = "Haptics: off (--no-start)" if self._no_start else "Haptics: off"
+                lines["error"], title = "", f"{APP_NAME} - haptics off"
+        else:
+            drops = f", {st['xruns']} dropouts" if st["xruns"] else ""
+            lines["state"] = f"Haptics: running ({st['device'] or 'no audio device'}{drops})"
+            tele = st["tele"]
+            if tele is None:
+                lines["game"] = "Game: none detected (waiting for telemetry)"
+            else:
+                src = next((x for x in st["sources"] if x["name"] == tele.source), None)
+                fps = f" at {src['fps']:.0f} fps" if src else ""
+                paused = " (paused)" if not tele.active else ""
+                lines["game"] = f"Game: {st['game'] or tele.source}{fps}{paused}"
+            prof = Path(st["profile"]).parent.name if st.get("profile") else "defaults"
+            lines["profile"] = f"Profile: {prof}" + (" (chosen by hand)" if st.get("manual_profile") else "")
+            db = st["peak_db"]
+            lines["output"] = "Output: silent" if db <= -100 else f"Output: {db:.1f} dBFS"
+            bad = st["audio_error"] or next((x["status"] for x in st["sources"] if x["error"]), "")
+            lines["error"] = f"Problem: {bad}" if bad else ""
+            game = st["game"] or ("no game" if tele is None else tele.source)
+            title = f"{APP_NAME} - running - {game}"
+        self._tray_lines = lines
+        self.tray.refresh(title, st is not None, tuple(lines.values()))
+
+    def _refresh(self) -> None:
+        self._refresh_outputs()
+        if self.rt is None or not self.rt.running:
+            self._last_status = None
+            state = (("Haptics off (--no-start) - Haptics on starts them" if self._no_start else "Haptics off")
+                     if not self.haptics_on
+                     else "Starting..." if not self.start_error
+                     else f"Not running: {self.start_error} - retrying every {self._retry_interval():.0f} s")
+            if self.status_var.get() != state:
+                self.status_var.set(state)
+            return
+        st = self._last_status = self.rt.status()
+        dev = f"{st['device']} @ {st['sr']} Hz, {st['latency_ms']:.0f} ms"
+        extra = f", {st['xruns']} dropouts" if st["xruns"] else ""
+        prof = Path(st["profile"]).parent.name if st.get("profile") else "defaults"
+        game = st.get("game") or "no game"
+        self.status_var.set(f"Running -> {dev}{extra}   |   {game} -> profile {prof}")
+        if st.get("preset") and st["preset"] != self.active_preset:
+            self.active_preset = st["preset"]              # the detected game owns what is playing
+            self.rt.profile_changed = False
+            self._select_preset(self.active_preset)
+            dropped = " The number you were typing was not applied." if self._dropped_typing else ""
+            self._dropped_typing = False
+            self.msg_var.set(f"{self._preset(self.active_preset)['label']} preset is active ({game}).{dropped}")
+        elif self.rt.profile_changed:
+            self.rt.profile_changed = False
+            self._sync_preset_note()
+        if st["audio_error"]:
+            self.status_var.set(f"Audio error: {st['audio_error']}")
+
+        self.sources_var.set("   ".join(f"{SOURCE_LABELS.get(s['name'], s['name'])}: {s['status']}"
+                                        for s in st["sources"]))
+        tele = st["tele"]
+        if tele is None:
+            self.src_var.set("no game detected (waiting for telemetry)")
+            for v in self.tele_vars.values():
+                v.set("-")
+        else:
+            src = next((s for s in st["sources"] if s["name"] == tele.source), None)
+            fps = src["fps"] if src else 0.0
+            phase = f"  [{src['phase']}]" if src and src["phase"] else ""
+            paused = "" if tele.active else "  (paused)"
+            self.src_var.set(f"{SOURCE_LABELS.get(tele.source, tele.source)}  {fps:.0f} fps{phase}{paused}")
+            g = 9.81
+            gear = "R" if tele.gear < 0 else ("N" if tele.gear == 0 else str(tele.gear))
+            self.tele_vars["rpm"].set(f"{tele.rpm:5.0f}/{tele.max_rpm:.0f}")
+            self.tele_vars["gear"].set(gear)
+            self.tele_vars["speed"].set(f"{tele.speed * 3.6:5.1f} km/h")
+            self.tele_vars["thr"].set(f"{tele.throttle * 100:3.0f} %")
+            self.tele_vars["brk"].set(f"{tele.brake * 100:3.0f} %")
+            self.tele_vars["glong"].set(f"{tele.accel_long / g:+.2f}")
+            self.tele_vars["glat"].set(f"{tele.accel_lat / g:+.2f}")
+            self.tele_vars["gvert"].set(f"{tele.accel_vert / g:+.2f}")
+        db = st["peak_db"]
+        self.level_bar["value"] = max(0.0, 60.0 + db)
+        self.level_var.set("-inf dB" if db <= -100 else f"{db:5.1f} dB")
+        for name, bar in self.effect_bars.items():
+            bar["value"] = min(1.0, st["levels"].get(name, 0.0))
+
+    # -- tray-facing API -----------------------------------------------------------------------
+    def run_on_ui(self, fn) -> None:
+        """Queue a call for the Tk thread.
+
+        Tray menu actions and the "another launch wants the window" message both arrive on other
+        threads, and Tk raises "main thread is not in main loop" if they touch it directly - which
+        is exactly the kind of failure that disappears into a worker thread. poll() drains this.
+        """
+        self._ui_queue.put(fn)
+
+    def _drain_ui_queue(self) -> None:
+        while True:
+            try:
+                fn = self._ui_queue.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                fn()
+            except Exception:
+                traceback.print_exc()
+
+    def window_visible(self) -> bool:
+        try:
+            return self.root.state() == "normal"
+        except tk.TclError:
+            return False
+
+    def show_window(self) -> None:
+        self.root.deiconify()
+        self.root.lift()
+        try:
+            self.root.focus_force()
+        except tk.TclError:
+            pass
+
+    def hide_window(self) -> None:
+        self.root.withdraw()
+
+    def is_running(self) -> bool:
+        return self.rt is not None and self.rt.running
+
+    # -- optional outputs (outputs.py) ---------------------------------------------------------------
+    def _output_guard(self, output, what: str, fn, *args):
+        """An output's trouble is a message, never an exception in the window."""
+        try:
+            return fn(*args)
+        except Exception as exc:
+            note = f"{getattr(output, 'name', 'output')}: {what} failed: {type(exc).__name__}: {exc}"
+            if hasattr(self, "msg_var"):
+                self.msg_var.set(note)
+            else:                                    # still building the window: say it on the first refresh
+                self._output_notes.append(note)
+            return None
+
+    def _place_output_rows(self, parent, first_row: int) -> None:
+        """Each output builds its own row (Tk thread); the window only puts it in place."""
+        for i, output in enumerate(self.outputs):
+            build = getattr(output, "build_row", None)
+            widget = self._output_guard(output, "building its row", build, parent) if build else None
+            if widget is not None:
+                widget.grid(row=first_row + i, column=0, columnspan=3, sticky="we", pady=(6, 0))
+                self.output_rows[output.name] = widget
+
+    def output_tray_line(self, output):
+        """The output's tray status line, or None. Called from pystray's thread: no Tk here."""
+        try:
+            line = output.tray_line() if hasattr(output, "tray_line") else None
+        except Exception as exc:
+            return f"{getattr(output, 'name', 'output')}: {type(exc).__name__}"
+        return str(line) if line is not None else None
+
+    def stop_output(self, output) -> None:
+        """The tray's "Stop ..." item. The output's stop_now() is thread-safe, so no Tk thread hop."""
+        try:
+            output.stop_now()
+        except Exception:
+            pass
+
+    def _refresh_outputs(self) -> None:
+        if self._output_notes:
+            self.msg_var.set("; ".join(self._output_notes))
+            self._output_notes = []
+
+    def tray_line(self, key: str) -> str:
+        return self._tray_lines.get(key, "")
+
+    def _notify_device_missing(self) -> None:
+        """Once per session in the tray; the window's status line says it for as long as it lasts."""
+        if self._device_warned:
+            return
+        self._device_warned = True
+        if not self.window_visible() and self.tray is not None:
+            self.tray.notify("The output device was not found. Open the window and pick your shaker "
+                             "under Output > Device.")
+
+    def _audio_lost(self) -> None:
+        """The output stopped playing (unplugged, switched off): say so and keep retrying, so the haptics
+        come back by themselves when the device does."""
+        device = getattr(getattr(self.rt, "audio", None), "device_name", "") or "The output device"
+        self._stop_runtime()
+        self.start_error = f"{device} stopped playing - unplugged or switched off?"
+        self._lost_at = time.monotonic()
+        self._retry_at = self._lost_at + LOST_RETRY_SECONDS
+        self.msg_var.set(f"{self.start_error} Retrying; Restart haptics tries again now.")
+        if not self.window_visible() and self.tray is not None:
+            self.tray.notify(f"{device} stopped playing. {APP_NAME} picks it up again when it is back.")
+        self._device_warned = True             # this said it already; no second "not found" toast
+
+    def _retry_interval(self) -> float:
+        return LOST_RETRY_SECONDS if time.monotonic() - self._lost_at < LOST_FAST_WINDOW else RETRY_SECONDS
+
+    def report_error(self, title: str, detail: str) -> None:
+        """A hidden tray app must not block on a modal dialog nobody can see."""
+        self.msg_var.set(f"{title}: {detail}")
+        if self.window_visible():
+            messagebox.showerror(title, detail)
+        elif self.tray is not None:
+            self.tray.notify(f"{title}: {detail}")
+
+    def windows_startup_enabled(self) -> bool:
+        from . import autostart
+        return autostart.is_enabled()
+
+    def toggle_windows_startup(self) -> None:
+        from . import autostart
+        try:
+            if autostart.is_enabled():
+                autostart.disable()
+                self.msg_var.set(f"{APP_NAME} will no longer start with Windows.")
+            else:
+                autostart.enable()
+                self.msg_var.set(f"{APP_NAME} will start with Windows, in the tray.")
+            self.cfg["windows_startup_asked"] = True
+            self._save_quietly()
+        except OSError as exc:
+            self.msg_var.set(f"Could not change the Windows startup entry: {exc}")
+        self._startup_changed()
+
+    def _startup_changed(self) -> None:
+        """Show the startup entry as it now is: the window's box, and the tray's tick (which pystray reads
+        only when it builds the menu)."""
+        from . import autostart
+        self.startup_var.set(autostart.is_enabled())
+        if self.tray is not None:
+            self.tray.update_menu()
+
+    def _save_quietly(self) -> None:
+        from . import config
+        try:
+            config.save_user(self.cfg, self.config_path)
+        except OSError:
+            return
+        self._saved_switch = self.cfg.get("haptics_on", True) is not False
+
+    def _setup_windows_startup(self, hidden: bool = False) -> None:
+        """Starting with Windows is opt-in. The first time the window opens the app asks once and
+        remembers the answer (`windows_startup_asked`), so nothing is registered without a yes.
+        Later launches only refresh a stale command (the app folder moved, or the venv was rebuilt).
+        """
+        from . import autostart
+        try:
+            if autostart.migrate_legacy():         # an entry under the app's old name moves to this one
+                self.cfg["windows_startup_asked"] = True
+                self._save_quietly()
+            if autostart.is_enabled() and not autostart.is_current():
+                autostart.enable()
+            self.startup_var.set(autostart.is_enabled())
+        except OSError:
+            pass
+        if paths.is_frozen() and not self.cfg.get("windows_startup_asked"):
+            self.cfg["windows_startup_asked"] = True       # the installer already offered it
+            self._save_quietly()
+        if self.ask_startup and not hidden and not self.cfg.get("windows_startup_asked"):
+            self.root.after(1500, self.ask_windows_startup)
+
+    def ask_windows_startup(self, answer: bool | None = None) -> None:
+        """The one-time question; `answer` skips the dialog."""
+        from . import autostart
+        if self.cfg.get("windows_startup_asked"):
+            return
+        if answer is None:
+            answer = messagebox.askyesno(
+                APP_NAME, f"Start {APP_NAME} with Windows?\n\nIt would wait in the notification area and "
+                "play haptics whenever a supported game sends telemetry. You can change this at any time "
+                "with the Start with Windows box.", parent=self.root)
+        try:
+            if answer and not autostart.is_enabled():
+                autostart.enable()
+        except OSError as exc:
+            self.msg_var.set(f"Could not add the Windows startup entry: {exc}")
+        self.cfg["windows_startup_asked"] = True
+        self._startup_changed()
+        self._save_quietly()
+
+    def quit_app(self) -> None:
+        try:
+            self._save_now()
+            self._stop_runtime()
+        finally:
+            for output in self.outputs:
+                try:
+                    output.close()
+                except Exception:
+                    pass
+            if self.tray is not None:
+                self.tray.stop()
+            if self.listener is not None:
+                self.listener.close()
+            self.root.destroy()
+
+    def on_close(self) -> None:
+        """The X button hides to the tray - haptics keep running - and only Quit really exits."""
+        if self.tray is not None and self.tray.active:
+            self.hide_window()
+            self.tray.notify("Still running here. Right-click for status, left-click to open.",
+                             once=True)
+        else:
+            self.quit_app()
+
+
+def ensure_tcl() -> None:
+    """Make Tk work from the venv: a Windows venv has no tcl/ directory of its own, and Tcl then
+    looks for init.tcl in places that do not exist (see gui_error.log). Point it at the base
+    interpreter's copy before the first Tk() call; a TCL_LIBRARY already set is left alone.
+    """
+    if os.environ.get("TCL_LIBRARY") or paths.is_frozen():      # PyInstaller sets up Tcl/Tk itself
+        return
+    base = Path(getattr(sys, "base_prefix", sys.prefix)) / "tcl"
+    tcl = sorted(base.glob("tcl8.*"))
+    tk_lib = sorted(base.glob("tk8.*"))
+    if tcl and tk_lib:
+        os.environ["TCL_LIBRARY"], os.environ["TK_LIBRARY"] = str(tcl[-1]), str(tk_lib[-1])
+
+
+def run_gui(cfg: dict, config_path: str, hidden: bool = False, start_haptics: bool = True,
+            use_tray: bool = True, listener=None) -> int:
+    ensure_tcl()
+    root = tk.Tk()
+    app = App(root, cfg, config_path, hidden=hidden, start_haptics=start_haptics, use_tray=use_tray)
+    if listener is not None:
+        connect_listener(app, listener)
+    root.mainloop()
+    return 0
+
+
+def connect_listener(app: App, listener) -> None:
+    """A second launch raises this window; --quit (and the installer) quits this copy cleanly."""
+    listener.on_show = lambda: app.run_on_ui(app.show_window)
+    listener.on_quit = lambda: app.run_on_ui(app.quit_app)
+    app.listener = listener
+
+
+def quit_running(timeout: float = 10.0) -> bool | None:
+    """--quit: ask a running copy (the tray app or a console run) to quit and wait until it has gone.
+
+    None when nothing was running, True once it has gone, False if it was still there after `timeout`.
+    """
+    from . import single_instance
+    if not single_instance.signal_existing(single_instance.QUIT):
+        return None
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not single_instance.is_running() and not single_instance.mutex_held():
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def _start_menu_entry() -> None:
+    """A copy run from source adds itself to the Start menu once (the installer does it otherwise)."""
+    try:
+        from . import autostart
+        autostart.ensure_start_menu_entry()
+    except Exception:
+        pass                                     # a missing Start menu entry must never stop the app
+
+
+def _startup_failure(message: str, details: str | None = None) -> None:
+    """The app could not get as far as its window: leave the reason in logs/gui_error.log and show it."""
+    try:
+        log = paths.log_dir() / "gui_error.log"
+        log.write_text(message + (f"\n\n{details}" if details else "") + "\n", encoding="utf-8")
+    except OSError:
+        log = None
+    try:
+        ensure_tcl()
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror(APP_NAME, message + (f"\n\nDetails: {log}" if log else ""), parent=root)
+        root.destroy()
+    except Exception:
+        pass
+
+
+def main(argv=None) -> int:
+    """Entry for OpenShaker.exe and openshaker/app.pyw. Errors go to logs/gui_error.log in the settings folder.
+
+    --hidden    start in the tray with no window (what the Windows startup entry uses)
+    --no-start  haptics off for this launch only, until Haptics on or Restart haptics (frees the game ports for
+                the calibration tools); the saved switch is left as it is
+    --no-tray   window only, no notification-area icon
+    --quit      ask a running copy to quit, wait until it has gone, and exit (the installer uses it)
+    """
+    from . import config, single_instance
+    args = list(sys.argv[1:] if argv is None else argv)
+    if "--quit" in args:
+        gone = quit_running()
+        print({None: f"{APP_NAME} is not running.", True: f"{APP_NAME} has quit.",
+               False: f"{APP_NAME} did not quit within 10 s."}[gone])
+        return 1 if gone is False else 0
+    listener = single_instance.acquire()
+    if listener is None:
+        if single_instance.signal_existing():  # already running: raise its window and leave
+            return 0
+        _startup_failure(
+            f"{APP_NAME} could not start: another copy seems to be running but does not answer, or another "
+            f"program is using its local port {single_instance.PORT}.\n\nQuit {APP_NAME} from the tray, or end "
+            f"OpenShaker.exe in Task Manager, and start it again.")
+        return 1
+    single_instance.hold_app_mutex()           # lets the installer see that the app is running
+    threading.Thread(target=_start_menu_entry, name="start-menu", daemon=True).start()
+    config_path = str(paths.config_path())
+    try:
+        paths.migrate_config()                 # settings from an earlier version, copied once
+        return run_gui(config.load(config_path), config_path,
+                       hidden="--hidden" in args, start_haptics="--no-start" not in args,
+                       use_tray="--no-tray" not in args, listener=listener)
+    except Exception:
+        _startup_failure(f"{APP_NAME} failed to start.", traceback.format_exc())
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

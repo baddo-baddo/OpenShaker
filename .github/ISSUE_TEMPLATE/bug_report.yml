@@ -1,0 +1,66 @@
+name: Bug report
+description: Something doesn't work, crashes, or behaves wrong.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time! OpenShaker was built with the help of AI (Claude) and is maintained by one person,
+        so a clear report is the fastest way to a fix.
+  - type: input
+    id: version
+    attributes:
+      label: OpenShaker version
+      description: Shown in the window title, e.g. "OpenShaker 1.0.0".
+      placeholder: "1.0.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: game
+    attributes:
+      label: Game
+      options:
+        - Forza Motorsport
+        - Forza Horizon 5
+        - Forza Horizon 6
+        - Assetto Corsa EVO
+        - BeamNG.drive
+        - Trackmania
+        - None / Demo mode
+        - Other (say which below)
+    validations:
+      required: true
+  - type: input
+    id: shaker
+    attributes:
+      label: Shaker and how it is connected
+      placeholder: "ButtKicker PRO (USB-C)  /  ButtKicker Gamer via amp on 3.5 mm  /  Dayton BST-1 via amp"
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: "Windows 11 24H2"
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+      description: Steps to reproduce help a lot. Include any text from the tray menu's "Problem:" line.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log (optional)
+      description: |
+        From %APPDATA%\OpenShaker\logs. Logs can contain your Windows user name inside file paths:
+        please replace it (e.g. with "USER") before pasting.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you submit
+      options:
+        - label: I searched the existing issues for the same problem.
+          required: true

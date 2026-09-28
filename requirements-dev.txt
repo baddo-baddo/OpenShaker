@@ -1,0 +1,6 @@
+# Recording, analysis and calibration tools (docs/CALIBRATION.md), on top of the runtime.
+# Tested with SoundCard 0.4.6, matplotlib 3.11.1, scipy 1.18.1.
+-r requirements.txt
+soundcard>=0.4.2
+matplotlib>=3.7
+scipy>=1.11
