@@ -1,13 +1,13 @@
 # PyInstaller spec for OpenShaker: a one-folder, windowed build (no console). build.bat runs it.
-# Only what the app needs at run time is bundled: the recording and calibration tools, the packages only
-# they use (matplotlib, scipy, soundcard) and OpenSSL (the app makes no HTTPS calls) stay out.
+# Only what the app needs at run time is bundled: the recording and calibration tools and the packages only
+# they use (matplotlib, scipy, soundcard) stay out. Python's ssl (OpenSSL) is in, for the update check's
+# HTTPS request to GitHub (openshaker/updater.py).
 from pathlib import Path
 
 ROOT = Path(SPECPATH).resolve().parent
 RUNTIME_PROFILES = ("forza_motorsport", "forza_horizon", "ace", "beamng", "trackmania")
 DEV_ONLY = ("analyze", "beamng_check", "calibrate", "compare", "fit", "optimize", "probe", "replay",
             "tm_grip", "tm_tune", "viz")
-NO_CRYPTO = ("ssl", "_ssl", "_hashlib")
 # optional local packages (openshaker/outputs.py): never in the installer (build.ps1 checks the result too)
 PRIVATE = ("openshaker.wheel",)
 
@@ -21,7 +21,7 @@ a = Analysis(
     datas=datas,
     hiddenimports=["pystray._win32"],
     excludes=["matplotlib", "scipy", "soundcard", "pytest", "IPython", "pandas"]
-             + [f"openshaker.{m}" for m in DEV_ONLY] + list(NO_CRYPTO) + list(PRIVATE),
+             + [f"openshaker.{m}" for m in DEV_ONLY] + list(PRIVATE),
     # pystray is LGPL-3.0: ship it as plain .py files next to the exe, so a user can replace it
     module_collection_mode={"pystray": "py"},
     noarchive=False,

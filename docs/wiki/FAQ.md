@@ -25,6 +25,9 @@ Yes: tick it in that game's preset. It then warns as the tyres' slip nears the l
 **OpenShaker picked the wrong Forza Horizon preset.**
 OpenShaker tells Horizon 5 and 6 apart by the program running on this PC. If the game runs on an Xbox or another PC, OpenShaker keeps the Horizon preset that was active, or uses Horizon 5. Both presets play the same tuning; only your own strengths differ.
 
+**Does OpenShaker phone home?**
+Only to ask GitHub, once a day, whether a newer version exists. That request carries nothing but the app's name and version; your game data, settings and hardware are never sent anywhere. Nothing is downloaded until you click **Update now**. Switch the check off under **Advanced... > Check for updates** and OpenShaker never contacts the internet. See [Updating](Start-With-Windows-Updates-and-Uninstalling.md#updating).
+
 **Something is missing or not working.**
 [Troubleshooting](Troubleshooting.md) lists symptoms and messages with their cause and fix, for example
 Forza Motorsport without gear shifts (the Sled format) or BeamNG without crashes (Motion Sim not ticked).

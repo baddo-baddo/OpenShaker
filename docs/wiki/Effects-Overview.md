@@ -143,7 +143,7 @@ Each section follows the same pattern:
 
 ## Where these facts come from
 
-Everything in this guide was checked against the 1.0.0 code and shipped presets. For the technically curious:
+Everything in this guide was checked against the code and shipped presets. For the technically curious:
 
 - **Game data:** [Forza](../../openshaker/sources/forza.py#L18-L93), [Assetto Corsa EVO](../../openshaker/sources/ace.py#L40-L194), [BeamNG.drive](../../openshaker/sources/beamng.py#L118-L233), [Trackmania](../../openshaker/sources/trackmania.py#L416-L551)
 - **Presets:** [Forza Motorsport](../../profiles/forza_motorsport/profile.json), [Forza Horizon](../../profiles/forza_horizon/profile.json), [Assetto Corsa EVO](../../profiles/ace/profile.json), [BeamNG.drive](../../profiles/beamng/profile.json), [Trackmania](../../profiles/trackmania/profile.json). Each preset's `meta` section explains its choices.

@@ -119,8 +119,9 @@ def main(argv=None) -> int:
             return 1
 
     rows = [("Python", py_version, "PSF-2.0 (plus the components listed in its licence)", "https://www.python.org",
-             f"{dll}, the standard library and its Windows DLLs (libffi, zlib, bzip2, XZ, expat, mpdecimal, "
-             "HACL* ...). Its LICENSE.txt and the licences of the software it incorporates follow below.")]
+             f"{dll}, the standard library and its Windows DLLs (OpenSSL for the update check's HTTPS, libffi, "
+             "zlib, bzip2, XZ, expat, mpdecimal, HACL* ...). Its LICENSE.txt (which includes OpenSSL's Apache "
+             "License 2.0) and the licences of the software it incorporates follow below.")]
     texts = []
     py_licence = base / "LICENSE.txt"
     if py_licence.exists():

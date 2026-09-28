@@ -8,7 +8,7 @@ under its own licence. Full licence texts follow the list.
 * Python 3.13.0
   Licence: PSF-2.0 (plus the components listed in its licence)
   Project: https://www.python.org
-  python313.dll, the standard library and its Windows DLLs (libffi, zlib, bzip2, XZ, expat, mpdecimal, HACL* ...). Its LICENSE.txt and the licences of the software it incorporates follow below.
+  python313.dll, the standard library and its Windows DLLs (OpenSSL for the update check's HTTPS, libffi, zlib, bzip2, XZ, expat, mpdecimal, HACL* ...). Its LICENSE.txt (which includes OpenSSL's Apache License 2.0) and the licences of the software it incorporates follow below.
 
 * Tcl/Tk 8.6
   Licence: Tcl/Tk License (BSD-style)

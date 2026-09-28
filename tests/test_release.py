@@ -492,10 +492,45 @@ class PackagingTests(unittest.TestCase):
         self.assertNotIn("postinstall", run_line, "no Finished page to tick: the app starts by itself")
         self.assertIn("skipifsilent", run_line, "an interactive install opens the window")
         relaunch = [line for line in run.splitlines() if "RelaunchAfterSilentUpdate" in line]
-        self.assertEqual(len(relaunch), 1, "a silent update puts the tray app back")
-        self.assertIn('Parameters: "--hidden"', relaunch[0], "into the tray, not a window")
+        self.assertEqual(len(relaunch), 2, "a silent update puts the app back it stopped")
+        tray_back = next(line for line in relaunch if "RelaunchAfterSilentUpdate(False)" in line)
+        window_back = next(line for line in relaunch if "RelaunchAfterSilentUpdate(True)" in line)
+        self.assertIn('Parameters: "--hidden"', tray_back, "into the tray, not a window")
+        self.assertNotIn("--hidden", window_back, "the app's own Update now from the window brings the window back")
         self.assertIn(f"CheckForMutexes('{single_instance.MUTEX_NAME}')", iss, "only if it was running")
-        self.assertIn("Result := WizardSilent and WasRunning;", iss)
+        self.assertIn("Result := WizardSilent and WasRunning and ((ExpandConstant('{param:SHOWWINDOW|0}') = '1') "
+                      "= WithWindow);", iss)
+        from openshaker import updater
+        self.assertIn("/SHOWWINDOW=1", updater.installer_command(Path("x.exe"), True), "the app passes what setup reads")
+        # the app's Update now: one setup at a time; a silent update keeps the user's current Start with
+        # Windows and desktop shortcut; a failed one starts the old version again and says so
+        self.assertIn("\nSetupMutex=OpenShakerSetup\n", iss.replace("\r\n", "\n"))
+        self.assertIn("Tasks: startup; Check: KeepStartup", iss)
+        self.assertIn("Tasks: desktopicon; Check: KeepDesktopIcon", iss)
+        self.assertIn("Result := WizardSilent and (InstalledExe() <> '');", iss)
+        self.assertIn("UpdateInstalled := True;", iss)
+        # setup that quit the app and then stopped (a failed update, a cancelled install) starts it again once
+        # it has let go of its mutex; after a silent update it says why, with the flags main() reads
+        text = iss.replace("\r\n", "\n")
+        deinit = re.search(r"^procedure DeinitializeSetup\(\);\n(.*?)^end;", text, re.S | re.M).group(1)
+        self.assertIn(f"while CheckForMutexes('{single_instance.MUTEX_NAME}') and (Waited < 30000) do", deinit)
+        self.assertIn("  if CurStep = ssInstall then\n    FilesStarted := True;", text)
+        from openshaker import gui
+        for flag, how in (("--update-failed", "failed"), ("--update-incomplete", "incomplete")):
+            self.assertIn(f"Params := '{flag}={{#AppVersion}}'", deinit)
+            self.assertEqual(gui.installer_result([f"{flag}=1.0.2"]), (how, "1.0.2"))
+        # an interactive install over an installed copy starts its ticks from what is there now, and an
+        # unticked box removes its entry
+        self.assertIn("if (CurPageID = wpSelectTasks) and (not TasksFromNow) and (InstalledExe() <> '') then", text)
+        for task in ("startup", "desktopicon"):
+            self.assertIn(f"WizardSelectTasks('!{task}')", text)
+            self.assertIn(f"if not WizardIsTaskSelected('{task}') then", text)
+        # the build writes the .sha256 asset the updater verifies against, and bundles what HTTPS needs
+        build = (ROOT / "installer" / "build.ps1").read_text(encoding="utf-8")
+        self.assertIn('[IO.File]::WriteAllText("$setup.sha256", "$hash  OpenShaker-Setup-$version.exe`n", '
+                      '[Text.Encoding]::ASCII)', build)
+        for part in ("_internal\\_ssl.pyd", "_internal\\libssl-3.dll", "_internal\\libcrypto-3.dll"):
+            self.assertIn(part, build)
         license_text = (ROOT / "LICENSE").read_text(encoding="utf-8")
         self.assertIn("Copyright (c) 2026 baddo\n", license_text.replace("\r\n", "\n"),
                       "the copyright holder is the maintainer alone (an AI cannot hold copyright)")

@@ -11,6 +11,8 @@ from .paths import RESOURCE_DIR as PROJECT_DIR   # bundled profiles: the exe's b
 DEFAULTS = {
     "windows_startup_asked": False,  # whether the Run entry has been set up (or declined) once
     "haptics_on": True,              # the window's and tray's Haptics on switch; config.json keeps it only while off
+    "updates": {"check": True,       # Advanced > Check for updates: ask GitHub once a day (updater.py)
+                "skip": ""},         # "Skip this version": hidden until a newer one appears
     "presets": {},                   # per-profile user strengths: {key: {"effects": {name: {trim, enabled}}}}
     "profile": None,                 # fallback profile.json (optional); per-game profiles below take precedence
     "profiles": {                    # profile to use for each detected game (auto-switching)
@@ -105,7 +107,7 @@ def _cleanup_done(user: dict) -> set:
 
 # Blocks config.json holds only where they differ from DEFAULTS. A copy of a default would freeze it:
 # a later release that changes the default (a port, a rate) would never reach that user.
-USER_BLOCKS = ("audio", "sources", "profiles", "game_processes")
+USER_BLOCKS = ("audio", "sources", "profiles", "game_processes", "updates")
 
 
 def _diff(value, default):
@@ -313,6 +315,13 @@ def _sanitize_user(user: dict | None) -> dict:
     u.pop("forward", None)            # live forwarding to HaptiConnect was removed
     if not isinstance(u.get("haptics_on", True), bool):
         u.pop("haptics_on")           # a hand-edit that is not true/false: the haptics stay on
+    if not isinstance(u.get("updates", {}), dict):
+        u.pop("updates")
+    upd = u.get("updates") or {}
+    if not isinstance(upd.get("check", True), bool):
+        upd.pop("check")              # not true/false: the check stays on
+    if not isinstance(upd.get("skip", ""), str):
+        upd.pop("skip")
     for name, params in ((u.get("effects") or {})).items():
         if not isinstance(params, dict):
             continue

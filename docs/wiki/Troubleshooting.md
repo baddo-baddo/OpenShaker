@@ -29,6 +29,8 @@ Symptoms and messages, their likely cause, and the fix.
 | "... saved; they apply when the haptics are switched on" | You changed a setting while the haptics were off | Switch them on |
 | "Could not save settings: ..." or the Haptics on switch "could not be saved" | The settings folder isn't writable | Fix the permissions on `%APPDATA%\OpenShaker` |
 | The window won't open, or "another copy seems to be running but does not answer, or another program is using its local port 49731" | A stuck copy, or a port clash | Quit OpenShaker from the tray or Task Manager. Read `%APPDATA%\OpenShaker\logs\gui_error.log`. To reset to defaults, delete `config.json`. |
+| "Update to X.Y.Z failed: ... Nothing was installed; Update now tries again." | No internet, GitHub not reachable, the download did not match its published size or SHA-256 (it was deleted), or the installer ended early | Try **Update now** again later, or download the installer from the release page (**What's new**). `logs\update.log` in the settings folder says what happened. |
+| "The update did not install, so OpenShaker X was started again." | The installer could not finish (a file was locked, or OpenShaker did not close in time) and put the old version back | Nothing to repair; the update is offered again at the next check |
 | Can't find the window | Closing it only hides it | Left-click the tray icon, or start OpenShaker from the Start menu |
 | "(no tray icon: ...)" (source copies) | The tray packages aren't installed | Install the requirements |
 | A console window opens at sign-in (source copies) | The Python used at sign-in is a launcher stub | Run `python -m openshaker.autostart repair` from the source copy's environment |

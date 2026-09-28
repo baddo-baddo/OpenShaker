@@ -1,0 +1,758 @@
+"""The update check and one-click update (openshaker/updater.py and its window/tray side). All faked: no
+network (tests/fakes.py sets OPENSHAKER_OFFLINE), no real installer, no real registry, no user files."""
+import hashlib
+import json
+import os
+import shutil
+import sys
+import tempfile
+import threading
+import time
+import unittest
+import urllib.request
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from fakes import close_window, fake_registry, no_optional_outputs, tk_root    # noqa: E402
+from openshaker import REPO_URL, config, gui, tray, updater                  # noqa: E402
+from test_haptics_switch import FakeRuntime                                  # noqa: E402
+
+PAYLOAD = b"MZ fake installer " * 1000
+SHA = hashlib.sha256(PAYLOAD).hexdigest()
+NAME = "OpenShaker-Setup-1.0.2.exe"
+AT = "@"                        # user-info URLs are spelled with this, so the file holds no e-mail-like text
+
+
+def api_answer(tag="v1.0.2", **over):
+    v = tag.lstrip("v")
+    data = {"tag_name": tag, "draft": False, "prerelease": False, "html_url": f"{REPO_URL}/releases/tag/{tag}",
+            "assets": [{"name": f"OpenShaker-Setup-{v}.exe", "size": len(PAYLOAD),
+                        "browser_download_url": f"{REPO_URL}/releases/download/{tag}/OpenShaker-Setup-{v}.exe"},
+                       {"name": f"OpenShaker-Setup-{v}.exe.sha256", "size": 100,
+                        "browser_download_url": f"{REPO_URL}/releases/download/{tag}/OpenShaker-Setup-{v}.exe.sha256"}]}
+    data.update(over)
+    return data
+
+
+def with_assets(fn, **over):
+    """api_answer() with every asset passed through fn."""
+    return api_answer(assets=[fn(dict(a)) for a in api_answer()["assets"]], **over)
+
+
+def env(test, **values):
+    """Set environment variables for this test only (None removes one)."""
+    for key, value in values.items():
+        test.addCleanup(lambda k=key, old=os.environ.get(key): os.environ.__setitem__(k, old) if old is not None
+                        else os.environ.pop(k, None))
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
+
+def patch(test, obj, name, value):
+    test.addCleanup(setattr, obj, name, getattr(obj, name))
+    setattr(obj, name, value)
+
+
+class VersionTests(unittest.TestCase):
+    def test_versions_compare_as_numbers_and_only_newer_counts(self):
+        self.assertEqual(updater.parse_version("v1.0.2"), (1, 0, 2))
+        self.assertEqual(updater.parse_version("1.10.0"), (1, 10, 0))
+        for bad in ("1.0.2-beta", "1.0", "v", "", None, "latest"):
+            self.assertIsNone(updater.parse_version(bad), bad)
+        self.assertTrue(updater.is_newer("1.0.1", "1.0.0"))
+        self.assertTrue(updater.is_newer("v1.10.0", "1.9.9"))
+        self.assertFalse(updater.is_newer("1.0.0", "1.0.0"), "the same version is not an update")
+        self.assertFalse(updater.is_newer("0.9.9", "1.0.0"), "never downgrade")
+        self.assertFalse(updater.is_newer("1.0.2-rc1", "1.0.0"), "pre-release tags are ignored")
+
+
+class AddressTests(unittest.TestCase):
+    def setUp(self):
+        env(self, OPENSHAKER_UPDATE_TEST=None)
+
+    def test_only_https_on_githubs_hosts_exactly_as_connected(self):
+        for good in ("https://api.github.com/repos/x/y/releases/latest", f"{REPO_URL}/releases/download/v1.0.2/{NAME}",
+                     "https://objects.githubusercontent.com/a", "https://release-assets.githubusercontent.com/a",
+                     "https://github.com:443/x"):
+            self.assertTrue(updater.url_allowed(good), good)
+        for bad in ("http://github.com/x", "https://github.com:444/x", "https://evil.example/x",
+                    "https://github.com.evil.example/x", f"https://github.com{AT}example.com/x",
+                    f"https://example.com{AT}github.com/x", f"https://evil.example\\{AT}github.com/x",
+                    f"https://user:pw{AT}github.com/x", "https://github.com:abc/x", "https://github.com:99999/x",
+                    "https://[::1/x", "http://127.0.0.1:8000/x", "file:///C:/x.exe", "not a url", None):
+            self.assertFalse(updater.url_allowed(bad), bad)
+
+    def test_the_api_address_comes_from_repo_url_and_the_override_only_in_test_mode(self):
+        env(self, OPENSHAKER_UPDATE_API="http://127.0.0.1:8000/latest")
+        self.assertEqual(updater.api_url(), "https://api.github.com/repos/baddo-baddo/OpenShaker/releases/latest")
+        self.assertFalse(updater.url_allowed("http://127.0.0.1:8000/latest"), "no local server outside test mode")
+        env(self, OPENSHAKER_UPDATE_TEST="1")
+        self.assertEqual(updater.api_url(), "http://127.0.0.1:8000/latest")
+        self.assertTrue(updater.url_allowed("http://127.0.0.1:8000/latest"))
+        self.assertFalse(updater.url_allowed("http://localhost:8000/latest"), "127.0.0.1 only")
+        self.assertFalse(updater.url_allowed(f"http://x{AT}127.0.0.1:8000/latest"))
+
+    def test_every_redirect_is_checked_and_a_bad_one_cannot_crash_the_check(self):
+        opener = updater._opener()
+        handler = next(h for h in opener.handlers if isinstance(h, urllib.request.HTTPRedirectHandler))
+        req = urllib.request.Request(f"{REPO_URL}/releases/download/v1.0.2/{NAME}")
+        for bad in ("https://evil.example/x.exe", "https://[::1/x", "https://github.com:x/y"):
+            with self.subTest(bad), self.assertRaises(updater.UpdateError):
+                handler.redirect_request(req, None, 302, "Found", {}, bad)
+        ok = handler.redirect_request(req, None, 302, "Found", {}, "https://release-assets.githubusercontent.com/a")
+        self.assertEqual(ok.full_url, "https://release-assets.githubusercontent.com/a")
+
+    def test_a_refused_host_is_never_contacted(self):
+        env(self, OPENSHAKER_OFFLINE=None)                  # past the offline guard: the host check stops it
+        with self.assertRaises(updater.UpdateError) as ctx:
+            updater.fetch_bytes("https://evil.example/latest", 100)
+        self.assertIn("refused", str(ctx.exception))
+        self.assertNotIsInstance(ctx.exception, updater.NetworkError)
+
+    def test_the_test_suite_is_offline(self):
+        self.assertTrue(updater.offline())
+        with self.assertRaises(updater.UpdateError):
+            updater.fetch_bytes(updater.api_url(), 100)
+
+
+class FakeResponse:
+    """What _open returns: read1() gives what one receive brings (`trickle` bytes at most), optionally
+    slowly or failing; read(n) waits for n bytes, as http.client's does."""
+
+    def __init__(self, body=b"", delay=0.0, error=None, trickle=None):
+        self.body, self.delay, self.error, self.trickle = body, delay, error, trickle
+
+    def read1(self, n):
+        if self.error:
+            raise self.error
+        time.sleep(self.delay)
+        n = min(n, self.trickle or n)
+        block, self.body = self.body[:n], self.body[n:]
+        return block
+
+    def read(self, n):
+        out = b""
+        while len(out) < n:
+            block = self.read1(n - len(out))
+            if not block:
+                break
+            out += block
+        return out
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class TransferTests(unittest.TestCase):
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir, True)
+
+    def serve(self, response):
+        patch(self, updater, "_open", lambda url, accept: response)
+
+    def test_a_download_has_a_total_deadline(self):
+        self.serve(FakeResponse(b"x" * (1 << 20), delay=0.02))
+        patch(self, updater, "MIN_DOWNLOAD_S", 0.05)
+        patch(self, updater, "MIN_RATE", 10 ** 12)          # the deadline is then the 0.05 s floor
+        with self.assertRaises(updater.NetworkError) as ctx:
+            updater.fetch_to("https://github.com/x", self.dir / "f", 1 << 20)
+        self.assertIn("too long", str(ctx.exception))
+
+    def test_a_trickling_server_cannot_hold_the_deadline_off(self):
+        # a byte per receive, each well inside the socket timeout: a whole-block read() would wait ~2 s
+        self.serve(FakeResponse(b"x" * 400, delay=0.005, trickle=1))
+        patch(self, updater, "MIN_DOWNLOAD_S", 0.1)
+        patch(self, updater, "MIN_RATE", 10 ** 12)
+        started = time.monotonic()
+        with self.assertRaises(updater.NetworkError) as ctx:
+            updater.fetch_to("https://github.com/x", self.dir / "f", 1 << 20)
+        self.assertIn("too long", str(ctx.exception))
+        self.assertLess(time.monotonic() - started, 1.0, "stopped at the deadline, not after a whole block")
+
+    def test_a_response_without_read1_still_reads(self):
+        class Plain(FakeResponse):
+            read1 = None
+            read = FakeResponse.read1                       # a read(n) that returns what it has
+        self.serve(Plain(b"abc"))
+        self.assertEqual(updater.fetch_bytes("https://github.com/x", 100), b"abc")
+
+    def test_a_broken_connection_is_a_network_error(self):
+        import http.client
+        for error in (OSError("reset"), http.client.IncompleteRead(b"x")):
+            with self.subTest(type(error).__name__):
+                self.serve(FakeResponse(error=error))
+                with self.assertRaises(updater.NetworkError):
+                    updater.fetch_bytes("https://github.com/x", 100)
+
+    def test_more_than_the_limit_is_refused(self):
+        self.serve(FakeResponse(b"x" * 500))
+        with self.assertRaises(updater.UpdateError):
+            updater.fetch_bytes("https://github.com/x", 100)
+
+
+class ReleaseTests(unittest.TestCase):
+    def setUp(self):
+        env(self, OPENSHAKER_UPDATE_TEST=None)
+
+    def test_a_newer_release_with_both_assets(self):
+        r = updater.release_from(api_answer(), current="1.0.1")
+        self.assertEqual((r.version, r.installer.size), ("1.0.2", len(PAYLOAD)))
+        self.assertEqual(r.installer.url, f"{REPO_URL}/releases/download/v1.0.2/{NAME}")
+        self.assertEqual(r.page_url, f"{REPO_URL}/releases/tag/v1.0.2")
+
+    def test_drafts_prereleases_odd_tags_and_older_releases_are_no_update(self):
+        for name, data in {"draft": api_answer(draft=True), "prerelease": api_answer(prerelease=True),
+                           "same": api_answer("v1.0.1"), "older": api_answer("v1.0.0"),
+                           "odd tag": api_answer(tag_name="nightly"), "tag not text": api_answer(tag_name=[1])}.items():
+            with self.subTest(name):
+                self.assertIsNone(updater.release_from(data, current="1.0.1"))
+
+    def test_a_newer_release_with_unusable_assets_says_why(self):
+        other_tag = lambda a: dict(a, browser_download_url=a["browser_download_url"].replace("/v1.0.2/", "/v0.0.1/"))
+        cases = {
+            "not a dict": ["x"],
+            "no assets list": api_answer(assets=5),
+            "no checksum": api_answer(assets=api_answer()["assets"][:1]),
+            "twice": api_answer(assets=api_answer()["assets"] + api_answer()["assets"][:1]),
+            "other repo": with_assets(lambda a: dict(a, browser_download_url=a["browser_download_url"].replace(
+                "baddo-baddo/OpenShaker", "someone/else"))),
+            "other tag": with_assets(other_tag),
+            "dot segments": with_assets(lambda a: dict(a, browser_download_url=(
+                f"{REPO_URL}/releases/download/../../../../evil/repo/releases/download/v1.0.2/{a['name']}"))),
+            "query": with_assets(lambda a: dict(a, browser_download_url=a["browser_download_url"] + "?x=1")),
+            "other host": with_assets(lambda a: dict(a, browser_download_url="https://evil.example/" + a["name"])),
+            "plain http": with_assets(lambda a: dict(a, browser_download_url=a["browser_download_url"].replace(
+                "https://", "http://"))),
+            "bad port": with_assets(lambda a: dict(a, browser_download_url="https://github.com:x/y")),
+            "no size": with_assets(lambda a: dict(a, size=0) if a["name"] == NAME else a),
+            "size is text": with_assets(lambda a: dict(a, size="21")),
+            "size is a bool": with_assets(lambda a: dict(a, size=True)),
+            "size is huge": with_assets(lambda a: dict(a, size=10 ** 400) if a["name"] == NAME else a),
+            "url not text": with_assets(lambda a: dict(a, browser_download_url=None)),
+        }
+        for name, data in cases.items():
+            with self.subTest(name), self.assertRaises(updater.UpdateError):
+                updater.release_from(data, current="1.0.1")
+        odd_names = api_answer(assets=[{"name": [1]}, {"name": None}] + api_answer()["assets"])
+        self.assertEqual(updater.release_from(odd_names, current="1.0.1").version, "1.0.2", "odd entries are skipped")
+
+    def test_owner_and_repo_may_differ_in_case_but_tag_and_file_may_not(self):
+        other_case = with_assets(lambda a: dict(a, browser_download_url=a["browser_download_url"].replace(
+            "baddo-baddo/OpenShaker", "Baddo-Baddo/openshaker")))
+        self.assertEqual(updater.release_from(other_case, current="1.0.1").version, "1.0.2")
+        for name, old, new in (("tag", "/v1.0.2/", "/V1.0.2/"), ("file", "/OpenShaker-Setup", "/openshaker-setup")):
+            data = with_assets(lambda a: dict(a, browser_download_url=a["browser_download_url"].replace(old, new)))
+            with self.subTest(name), self.assertRaises(updater.UpdateError):
+                updater.release_from(data, current="1.0.1")
+
+    def test_a_foreign_release_page_falls_back_to_ours(self):
+        r = updater.release_from(api_answer(html_url="https://evil.example/notes"), current="1.0.1")
+        self.assertEqual(r.page_url, f"{REPO_URL}/releases/tag/v1.0.2")
+
+    def test_check_asks_the_api_once_and_bad_json_is_an_update_error(self):
+        asked = []
+
+        def fetch(url, limit, accept):
+            asked.append((url, accept))
+            return json.dumps(api_answer()).encode()
+        self.assertEqual(updater.check("1.0.1", fetch=fetch).version, "1.0.2")
+        self.assertEqual(asked, [(updater.api_url(), "application/vnd.github+json")])
+        for raw in (b"<html>rate limited</html>", b"[" * 100_000, b"\xff\xfe{}"):
+            with self.subTest(raw[:10]), self.assertRaises(updater.UpdateError):
+                updater.check("1.0.1", fetch=lambda *_a, r=raw: r)
+
+
+class ChecksumTests(unittest.TestCase):
+    def good(self, raw):
+        self.assertEqual(updater.expected_sha256(raw, NAME), SHA)
+
+    def test_the_line_that_names_the_installer_in_any_common_encoding(self):
+        line = f"{SHA}  {NAME}\n"
+        self.good(line.encode("ascii"))
+        self.good(f"{SHA.upper()} *{NAME}\r\n".encode())                       # binary marker, CRLF
+        self.good(("\ufeff" + line).encode("utf-8"))                            # UTF-8 with a BOM
+        self.good(line.encode("utf-16"))                                        # UTF-16 LE with a BOM
+        self.good(("\ufeff" + line).encode("utf-16-be"))                        # UTF-16 BE with a BOM
+        self.good(f"{SHA}  dist\\{NAME}\n".encode())                            # with a folder in front
+        self.good(f"{'0' * 64}  other.exe\n{SHA}  {NAME}\n".encode())          # its own line, not the first
+
+    def test_anything_else_is_refused(self):
+        for raw in (f"{SHA}\n".encode(),                                        # a bare hash names nothing
+                    f"{SHA}  other.exe\n".encode(), b"not a hash", b"",
+                    f"{SHA}  {NAME}\n{'0' * 64}  {NAME}\n".encode(),            # two different hashes
+                    f"{SHA[:-1]}  {NAME}\n".encode()):
+            with self.subTest(raw[:20]), self.assertRaises(updater.UpdateError):
+                updater.expected_sha256(raw, NAME)
+
+
+class DownloadTests(unittest.TestCase):
+    def setUp(self):
+        env(self, OPENSHAKER_UPDATE_TEST=None)
+        self.temp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.temp, True)
+        self.release = updater.release_from(api_answer(), current="1.0.1")
+
+    def fetchers(self, payload=PAYLOAD, sha_text=None, sha_error=None):
+        def fetch(url, limit):
+            if sha_error:
+                raise sha_error
+            self.assertTrue(url.endswith(".sha256"))
+            return (sha_text if sha_text is not None else f"{SHA}  {NAME}\n").encode()
+
+        def fetch_file(url, dest, limit):
+            Path(dest).write_bytes(payload)
+            return len(payload), hashlib.sha256(payload).hexdigest()
+        return fetch, fetch_file
+
+    def leftovers(self):
+        return list(self.temp.glob(updater.TEMP_PREFIX + "*"))
+
+    def test_a_verified_download(self):
+        fetch, fetch_file = self.fetchers()
+        v = updater.download(self.release, self.temp, fetch, fetch_file)
+        self.assertEqual((v.path.read_bytes(), v.size, v.sha256), (PAYLOAD, len(PAYLOAD), SHA))
+        self.assertTrue(v.path.parent.name.startswith(updater.TEMP_PREFIX))
+        self.assertEqual(v.path.parent.parent, self.temp)
+
+    def test_every_mismatch_aborts_and_deletes(self):
+        cases = {
+            "size": self.fetchers(payload=PAYLOAD + b"x"),
+            "hash": self.fetchers(payload=PAYLOAD[:-1] + b"?"),
+            "bad .sha256": self.fetchers(sha_text="not a hash"),
+            ".sha256 of another file": self.fetchers(sha_text=f"{SHA}  something-else.exe"),
+            "bare hash": self.fetchers(sha_text=SHA),
+            "network": self.fetchers(sha_error=OSError("timed out")),
+        }
+        for name, (fetch, fetch_file) in cases.items():
+            with self.subTest(name):
+                with self.assertRaises(updater.UpdateError):
+                    updater.download(self.release, self.temp, fetch, fetch_file)
+                self.assertEqual(self.leftovers(), [], "nothing is left behind")
+
+    def test_a_wrong_host_aborts_and_deletes(self):
+        env(self, OPENSHAKER_OFFLINE=None)                  # the real fetchers: the host check stops them
+        bad = updater.Asset(NAME + ".sha256", 100, "https://evil.example/x.sha256")
+        release = updater.Release("1.0.2", REPO_URL, self.release.installer, bad)
+        with self.assertRaises(updater.UpdateError):
+            updater.download(release, self.temp)
+        self.assertEqual(self.leftovers(), [])
+
+    def test_old_update_folders_are_cleaned_up_and_discard_touches_only_update_folders(self):
+        old, fresh = self.temp / (updater.TEMP_PREFIX + "old"), self.temp / (updater.TEMP_PREFIX + "new")
+        old.mkdir(), fresh.mkdir()
+        os.utime(old, (time.time() - 2 * updater.OLD_DOWNLOAD_S,) * 2)
+        updater.clean_old_downloads(self.temp)
+        self.assertEqual(self.leftovers(), [fresh])
+        other = self.temp / "keep"
+        other.mkdir()
+        (other / NAME).write_bytes(b"x")
+        updater.discard(other / NAME, self.temp)
+        self.assertTrue(other.exists(), "a folder that is no update folder is never deleted")
+        updater.discard(fresh / NAME, self.temp)
+        self.assertEqual(self.leftovers(), [])
+
+    def test_the_log_keeps_its_last_lines(self):
+        for i in range(updater.LOG_KEEP + 10):
+            updater.log(f"line {i}", self.temp)
+        lines = (self.temp / updater.LOG_NAME).read_text(encoding="utf-8").splitlines()
+        self.assertEqual(len(lines), updater.LOG_KEEP)
+        self.assertTrue(lines[-1].endswith(f"line {updater.LOG_KEEP + 9}"))
+        updater.log("never raises", self.temp / "missing" / "folder")
+
+
+class InstallerTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.temp, True)
+        self.exe = self.temp / (updater.TEMP_PREFIX + "x") / NAME
+        self.exe.parent.mkdir()
+        self.exe.write_bytes(PAYLOAD)
+        self.verified = updater.Verified(self.exe, len(PAYLOAD), SHA)
+        self.runs = []
+
+    def popen(self, args, **kw):
+        self.runs.append((args, kw))
+        return "process"
+
+    def run_it(self, verified=None, show=True):
+        return updater.run_installer(verified or self.verified, show, popen=self.popen, installed=lambda: True,
+                                     temp_root=self.temp)
+
+    def test_an_argument_list_no_shell_and_the_window_flag_only_when_asked(self):
+        self.assertEqual(self.run_it(show=True), "process", "the app keeps the process to watch it")
+        self.run_it(show=False)
+        (with_window, kw), (tray_only, _kw) = self.runs
+        self.assertEqual(with_window, [str(self.exe), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SHOWWINDOW=1"])
+        self.assertEqual(tray_only, [str(self.exe), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"])
+        self.assertIs(kw["shell"], False)
+
+    def test_the_file_is_hashed_again_right_before_it_runs(self):
+        self.exe.write_bytes(PAYLOAD[:-1] + b"!")                                # swapped after the check
+        with self.assertRaises(updater.UpdateError) as ctx:
+            self.run_it()
+        self.assertIn("changed", str(ctx.exception))
+        self.exe.unlink()
+        with self.assertRaises(updater.UpdateError) as ctx:
+            self.run_it()
+        self.assertIn("gone", str(ctx.exception))
+        self.assertEqual(self.runs, [])
+
+    def test_a_source_copy_or_a_stray_file_never_runs(self):
+        with self.assertRaises(updater.UpdateError):
+            updater.run_installer(self.verified, True, popen=self.popen, installed=lambda: False, temp_root=self.temp)
+        stray = self.temp / NAME
+        stray.write_bytes(PAYLOAD)
+        with self.assertRaises(updater.UpdateError):
+            self.run_it(updater.Verified(stray, len(PAYLOAD), SHA))
+        self.assertEqual(self.runs, [])
+        self.assertFalse(updater.is_installed_copy(), "the test run is not an installed copy")
+
+
+class FakeProcess:
+    def __init__(self):
+        self.code = None
+
+    def poll(self):
+        return self.code
+
+
+@unittest.skipUnless(tray.AVAILABLE, f"pystray/Pillow not installed ({tray.IMPORT_ERROR})")
+class WindowTests(unittest.TestCase):
+    """The badge and the bar, Skip, Update now, failures; never a notification."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        env(self, OPENSHAKER_UPDATE_TEST=None, OPENSHAKER_HOME=str(self.dir))   # update.log lands here
+        fake_registry(self)
+        no_optional_outputs(self)
+        self.path = self.dir / "config.json"
+        patch(self, gui, "Runtime", FakeRuntime)
+        FakeRuntime.made, FakeRuntime.fail = [], False
+        from test_tray import FakeIcon
+        patch(self, tray.pystray, "Icon", FakeIcon)
+        self.asked, self.downloads, self.installs, self.opened, self.questions = [], [], [], [], []
+        patch(self, updater, "check", self.fake_check)
+        patch(self, updater, "download", self.fake_download)
+        patch(self, updater, "run_installer", self.fake_run)
+        patch(self, updater, "is_installed_copy", lambda: True)
+        patch(self, gui.webbrowser, "open", lambda url: self.opened.append(url) or True)
+        patch(self, gui.messagebox, "askyesno", self.fake_ask)
+        self.answer = updater.release_from(api_answer(), current="1.0.1")
+        self.check_error = self.download_error = self.install_error = None
+        self.yes, self.process, self.during_question = True, FakeProcess(), None
+
+    def fake_check(self):
+        self.asked.append(1)
+        if self.check_error:
+            raise self.check_error
+        return self.answer
+
+    def fake_download(self, release):
+        self.downloads.append(release.version)
+        if self.download_error:
+            raise updater.UpdateError(self.download_error)
+        return updater.Verified(self.dir / NAME, len(PAYLOAD), SHA)
+
+    def fake_run(self, verified, show):
+        if self.install_error:
+            raise updater.UpdateError(self.install_error)
+        self.installs.append((verified.path, show))
+        return self.process
+
+    def fake_ask(self, *a, **k):
+        self.questions.append(a)
+        if self.during_question:
+            self.during_question()
+        return self.yes
+
+    def app(self, check=True, **kw):
+        if not check:
+            self.path.write_text(json.dumps({"updates": {"check": False}}), encoding="utf-8")
+        root = tk_root()
+        self.addCleanup(close_window, root)
+        app = gui.App(root, config.load(self.path), str(self.path), start_haptics=False, use_tray=True,
+                      ask_startup=False, **kw)
+        self.assertTrue(app.tray.active)
+        return app
+
+    def checked(self, app):
+        app._update_worker()                              # the worker thread's body, run here
+        app._drain_ui_queue()
+
+    def wait_for(self, app, name):
+        for t in [t for t in threading.enumerate() if t.name == name]:
+            t.join(5)
+        app._drain_ui_queue()
+
+    def game_running(self, app):
+        status = FakeRuntime(app.cfg).status()               # a whole status, as the running app has one
+        status["tele"] = type("Tele", (), {"active": True, "source": "forza"})()
+        app._last_status = status
+
+    def tray_item(self, app):
+        return next(i for i in app.tray.icon.menu if str(i).startswith(("Update ", "Updating ")))
+
+    def test_an_update_shows_a_badge_and_a_bar_and_no_notification(self):
+        app = self.app()
+        self.assertIsNotNone(app._update_job, "a check is scheduled for ~30 s after start")
+        self.assertEqual(app.update_bar.winfo_manager(), "", "no bar before a check")
+        self.checked(app)
+        self.assertEqual(app.update_version(), "1.0.2")
+        self.assertEqual(app.update_bar.winfo_manager(), "pack")
+        self.assertIn("1.0.2 is available", app.update_var.get())
+        self.assertNotIn("test mode", app.update_var.get())
+        self.assertNotEqual(app.tray.icon.icon.tobytes(), app.tray._stopped_img.tobytes(), "the tray icon has a badge")
+        self.assertEqual(app.tray.icon.notified, [], "no pop-up")
+        app.open_whats_new()
+        self.assertEqual(self.opened, [f"{REPO_URL}/releases/tag/v1.0.2"])
+
+    def test_a_pulled_release_is_no_longer_offered(self):
+        app = self.app()
+        self.checked(app)
+        self.answer = None                                # GitHub answers: nothing newer after all
+        self.checked(app)
+        self.assertEqual((app.update_version(), app.update_bar.winfo_manager()), ("", ""))
+        self.assertEqual(app.tray.icon.icon.tobytes(), app.tray._stopped_img.tobytes(), "the badge went too")
+
+    def test_update_now_asks_again_first_and_installs_nothing_that_was_pulled(self):
+        app = self.app()
+        self.checked(app)
+        self.answer = None
+        app.update_now()
+        self.wait_for(app, "update")
+        self.assertEqual((self.downloads, self.installs), ([], []))
+        self.assertEqual(app.update_version(), "")
+        self.assertIn("no longer offered", app.msg_var.get())
+
+    def test_update_now_installs_only_the_version_clicked(self):
+        app = self.app()
+        self.checked(app)                                 # 1.0.2 shown
+        self.answer = updater.release_from(api_answer("v1.0.3"), current="1.0.1")    # replaced meanwhile
+        app.update_now()
+        self.wait_for(app, "update")
+        self.assertEqual((self.downloads, self.installs), ([], []))
+        self.assertIn("1.0.2 is no longer offered", app.msg_var.get())
+        self.assertEqual(app.update_version(), "1.0.3", "the bar offers the new one instead")
+        self.assertIn("1.0.3 is available", app.update_var.get())
+        self.assertFalse(app._update_busy)
+        app.cfg.setdefault("updates", {})["skip"] = "1.0.2"
+        self.answer = updater.release_from(api_answer(), current="1.0.1")   # 1.0.3 pulled: the skipped 1.0.2
+        app.update_now()
+        self.wait_for(app, "update")
+        self.assertEqual((self.downloads, self.installs), ([], []), "a skipped version is never installed")
+        self.assertEqual((app.update_version(), app.update_bar.winfo_manager()), ("", ""))
+
+    def test_a_skipped_release_coming_back_hides_the_one_shown(self):
+        app = self.app()
+        self.checked(app)
+        app.skip_update()                                 # 1.0.2 skipped
+        self.answer = updater.release_from(api_answer("v1.0.3"), current="1.0.1")
+        self.checked(app)
+        self.assertEqual(app.update_version(), "1.0.3")
+        self.answer = updater.release_from(api_answer(), current="1.0.1")   # 1.0.3 pulled: 1.0.2 is latest again
+        self.checked(app)
+        self.assertEqual((app.update_version(), app.update_bar.winfo_manager()), ("", ""))
+
+    def test_skip_is_saved_a_newer_version_shows_again_and_a_bad_skip_is_ignored(self):
+        app = self.app()
+        self.checked(app)
+        app.skip_update()
+        self.assertEqual(json.loads(self.path.read_text(encoding="utf-8"))["updates"], {"skip": "1.0.2"})
+        self.assertEqual((app.update_version(), app.update_bar.winfo_manager()), ("", ""))
+        self.checked(app)
+        self.assertEqual(app.update_version(), "", "the skipped version stays hidden")
+        self.answer = updater.release_from(api_answer("v1.0.3"), current="1.0.1")
+        self.checked(app)
+        self.assertEqual(app.update_version(), "1.0.3", "a newer one shows again")
+        app.cfg["updates"]["skip"] = "latest"             # a hand-edit that is no version
+        self.checked(app)
+        self.assertEqual(app.update_version(), "1.0.3", "hides nothing")
+
+    def test_the_setting_off_means_no_request_at_all(self):
+        app = self.app(check=False)
+        self.assertIsNone(app._update_job)
+        app._start_update_check()
+        self.assertEqual(self.asked, [], "nothing asked GitHub")
+        app.cfg["updates"]["check"] = True
+        app._apply_advanced([])
+        self.assertIsNotNone(app._update_job, "switched back on: a check is scheduled")
+        self.checked(app)
+        app._apply_advanced([((app.cfg["updates"], "check"), False)])
+        self.assertIsNone(app._update_job)
+        self.assertEqual(app.update_version(), "", "switching it off hides a shown update")
+        self.assertIs(json.loads(self.path.read_text(encoding="utf-8"))["updates"]["check"], False)
+
+    def test_a_network_failure_retries_sooner_and_anything_else_waits_a_day(self):
+        app = self.app()
+        delays = []
+        patch(self, app, "_schedule_update_check", lambda s: delays.append(s))
+        self.check_error = updater.NetworkError("URLError: no network")
+        for _ in range(4):
+            self.checked(app)
+        self.check_error = updater.UpdateError("GitHub answered 403 rate limit exceeded")
+        self.checked(app)
+        self.check_error = None
+        self.checked(app)
+        self.assertEqual(delays, [*updater.RETRY_AFTER_S, updater.CHECK_EVERY_S, updater.CHECK_EVERY_S,
+                                  updater.CHECK_EVERY_S])
+        self.assertEqual(app.update_version(), "1.0.2")
+        log = (self.dir / "logs" / updater.LOG_NAME).read_text(encoding="utf-8")
+        self.assertIn("check failed: NetworkError: URLError: no network", log)
+        self.assertIn("403", log)
+        self.assertEqual(app.tray.icon.notified, [])
+
+    def test_update_now_downloads_then_runs_the_installer_bringing_the_window_back(self):
+        app = self.app()
+        self.checked(app)
+        app.update_now()
+        self.assertEqual(app.update_status(), "busy")
+        self.assertEqual(str(self.tray_item(app)), "Updating to 1.0.2...")
+        self.assertFalse(self.tray_item(app).enabled)
+        self.wait_for(app, "update")
+        self.assertEqual(self.downloads, ["1.0.2"])
+        self.assertEqual(self.installs, [(self.dir / NAME, True)])
+        self.assertIn("Installing", app.update_var.get())
+        self.assertEqual(self.questions, [], "no game running: no question")
+
+    def test_an_installer_that_ends_early_or_hangs_frees_update_now_again(self):
+        app = self.app()
+        self.checked(app)
+        app.update_now()
+        self.wait_for(app, "update")
+        self.process.code = 2                              # setup gave up while this app still runs
+        app._watch_installer()
+        self.assertFalse(app._update_busy)
+        self.assertIn("ended without updating (exit code 2)", app.update_var.get())
+        self.assertEqual(app.update_status(), "failed")
+        self.assertEqual(str(self.tray_item(app)), "Update to 1.0.2 failed - open OpenShaker")
+        self.assertIn("update to 1.0.2 failed", (self.dir / "logs" / updater.LOG_NAME).read_text(encoding="utf-8"))
+        self.process = FakeProcess()
+        app.update_now()                                   # tries again
+        self.wait_for(app, "update")
+        app._installer_watch = (self.process, time.monotonic() - gui.INSTALLER_WAIT_S - 1)
+        app._watch_installer()
+        self.assertIn("did not finish", app.update_var.get())
+        self.assertEqual(app.tray.icon.notified, [])
+
+    def test_from_the_tray_it_comes_back_in_the_tray_and_a_failure_opens_the_window(self):
+        app = self.app()
+        self.checked(app)
+        app.update_from_tray()
+        self.wait_for(app, "update")
+        self.assertEqual(self.installs, [(self.dir / NAME, False)])
+        app._update_failed("the installer ended without updating (exit code 1)")
+        shown = []
+        patch(self, app, "show_window", lambda: shown.append(1))
+        app.update_from_tray()
+        self.assertEqual(shown, [1], "a failure's tray item opens the window, where the bar says why")
+
+    def test_a_failed_download_or_installer_start_says_so_and_installs_nothing(self):
+        for field, text in (("download_error", "the download does not match its SHA-256"),
+                            ("install_error", "the downloaded installer changed after it was checked")):
+            with self.subTest(field):
+                setattr(self, field, text)
+                app = self.app()
+                self.checked(app)
+                app.update_now()
+                self.wait_for(app, "update")
+                self.assertEqual(self.installs, [])
+                self.assertIn(f"failed: {text}", app.update_var.get())
+                self.assertFalse(app._update_busy, "Update now can be tried again")
+                setattr(self, field, None)
+
+    def test_a_game_running_asks_first_in_the_window_and_blocks_a_second_click(self):
+        app = self.app()
+        self.checked(app)
+        self.game_running(app)
+        shown = []
+        patch(self, app, "show_window", lambda: shown.append(1))
+        self.during_question = lambda: app.update_from_tray()   # a second click while the question is open
+        self.yes = False
+        app.update_now()
+        self.assertEqual([q[1] for q in self.questions], [gui.UPDATE_CONFIRM], "asked once, not twice")
+        self.assertEqual(shown, [1], "the window comes up so the question is not hidden behind the game")
+        self.assertEqual(self.downloads, [], "no means no")
+        self.assertFalse(app._update_busy)
+        self.during_question, self.yes = None, True
+        app.update_now()
+        self.wait_for(app, "update")
+        self.assertEqual(self.downloads, ["1.0.2"])
+
+    def test_a_source_copy_opens_the_release_page_and_never_runs_the_installer(self):
+        patch(self, updater, "is_installed_copy", lambda: False)
+        app = self.app()
+        self.checked(app)
+        app.update_now()
+        self.assertEqual((self.downloads, self.installs), ([], []))
+        self.assertEqual(self.opened, [f"{REPO_URL}/releases/tag/v1.0.2"])
+        self.assertIn("runs from source", app.update_var.get())
+
+    def test_a_failed_check_stays_quiet(self):
+        self.check_error = OSError("no network")
+        app = self.app()
+        self.checked(app)
+        self.assertEqual((app.update_version(), app.update_bar.winfo_manager()), ("", ""))
+        self.assertIn("no network", app.update_error)
+        self.assertEqual(app.tray.icon.notified, [])
+
+    def test_a_failed_silent_update_says_so_in_the_bar_the_tray_and_the_log(self):
+        app = self.app(update_result=("failed", "1.0.2"))
+        self.assertEqual(app.update_bar.winfo_manager(), "pack")
+        self.assertIn("The update to 1.0.2 did not install", app.update_var.get())
+        self.assertEqual(str(self.tray_item(app)), "Update to 1.0.2 failed - open OpenShaker")
+        self.assertIn("update to 1.0.2 failed; setup started", (self.dir / "logs" / updater.LOG_NAME).read_text(
+            encoding="utf-8"))
+        self.checked(app)
+        self.assertIn("1.0.2 is available", app.update_var.get(), "the next check offers it again")
+        self.assertEqual(app.update_status(), "")
+        app = self.app(update_result=("failed", "1.0.2"))
+        self.answer = None                                # pulled meanwhile: nothing to say any more
+        self.checked(app)
+        self.assertEqual((app.update_version(), app.update_bar.winfo_manager()), ("", ""))
+
+    def test_an_update_that_stopped_partway_asks_for_the_installer_until_one_is_offered(self):
+        app = self.app(update_result=("incomplete", "1.0.2"))
+        self.assertIn("stopped partway", app.update_var.get())
+        self.assertEqual(str(self.tray_item(app)), "Update to 1.0.2 failed - open OpenShaker")
+        self.assertEqual({name: button.instate(["!disabled"]) for name, button in app.update_buttons.items()},
+                         {"skip": False, "news": True, "now": False})
+        app.open_whats_new()
+        self.assertEqual(self.opened, [f"{REPO_URL}/releases/tag/v1.0.2"])
+        self.assertIn("update to 1.0.2 stopped partway through its files", (self.dir / "logs" / updater.LOG_NAME)
+                      .read_text(encoding="utf-8"))
+        self.answer = None                                # this copy may be 1.0.2 already: nothing newer
+        self.checked(app)
+        self.assertIn("stopped partway", app.update_var.get(), "the note stays")
+        self.answer = updater.release_from(api_answer(), current="1.0.1")
+        self.checked(app)
+        self.assertIn("1.0.2 is available", app.update_var.get(), "Update now installs it again, which repairs it")
+
+    def test_test_mode_is_visible(self):
+        env(self, OPENSHAKER_UPDATE_TEST="1")
+        app = self.app()
+        self.checked(app)
+        self.assertIn("[update test mode]", app.update_var.get())
+
+
+class InstallerFlagTests(unittest.TestCase):
+    def test_setups_flags_are_read_strictly(self):
+        read = gui.installer_result
+        self.assertEqual(read(["--hidden", "--update-failed=1.0.2"]), ("failed", "1.0.2"))
+        self.assertEqual(read(["--update-incomplete=v1.0.2"]), ("incomplete", "1.0.2"))
+        self.assertEqual(read(["--update-failed"]), ("failed", ""))
+        self.assertEqual(read(["--update-failed=1.0.2/../x"]), ("failed", ""), "no version: dropped")
+        self.assertIsNone(read(["--hidden", "--update-failedX"]))
+        self.assertIsNone(read([]))
+
+
+if __name__ == "__main__":
+    unittest.main()

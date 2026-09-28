@@ -16,6 +16,8 @@ How to download and install OpenShaker, what the installer does, and the first t
 - There is **one screen** with two options, both ticked by default:
   - **Start OpenShaker with Windows (it waits in the notification area)**
   - **Create a desktop shortcut**
+
+  Run over an installed copy, the boxes start from what you have now instead, and unticking one removes that entry ([Updating by hand](Start-With-Windows-Updates-and-Uninstalling.md#updating-by-hand)).
 - A Start menu entry is always created.
 - OpenShaker **starts as soon as installation finishes and opens its window**. There is no "Finished" page. Closing the window keeps it running in the notification area.
 - The licence and third-party notices are installed next to the program.

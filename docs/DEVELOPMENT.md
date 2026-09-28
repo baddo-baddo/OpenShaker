@@ -298,6 +298,101 @@ a dummy package, with and without the exclude; a literal import is caught), and 
 appears in PYZ/PKG/COLLECT/EXE-00.toc or as a file in the app folder. `tests/test_outputs.py` checks
 that every name in `OPTIONAL_PACKAGES` is in both guards.
 
+## Updates
+
+`openshaker/updater.py` (1.0.1) holds the pure parts; `gui.App` schedules and shows them.
+
+- **Check:** `App._schedule_update_check` runs `updater.check()` on a worker thread
+  `CHECK_DELAY_S` (30 s) after start, only while `updates.check` is on (Advanced > Check for
+  updates; config.json keeps it only when off).
+  - It GETs `https://api.github.com/repos/<owner>/<repo>/releases/latest`, derived from `REPO_URL`,
+    with urllib: a 15 s timeout per connect and read and 60 s in total, User-Agent
+    `OpenShaker/<version>`, no auth, nothing else sent.
+  - `release_from()` returns None for drafts, pre-releases, non-`X.Y.Z` tags and anything not newer
+    than `__version__`. A newer release must have exactly one `OpenShaker-Setup-X.Y.Z.exe` and one
+    `.exe.sha256` asset, each at exactly `REPO_URL/releases/download/<tag>/<name>` (owner and repository
+    compared case-insensitively, as GitHub treats them; the tag and the name exactly), with an integer
+    size. Otherwise it raises `UpdateError` with the reason. Malformed JSON of any shape is an
+    `UpdateError` too.
+  - The next check follows the answer: 24 h after a success or an answer from GitHub (a 403 or 429
+    included). After a `NetworkError` (no connection, a timeout, a broken transfer) it comes after 10
+    min, 1 h and 4 h (`RETRY_AFTER_S`), then daily.
+  - Failures are silent in the UI. `App.update_error` keeps the last one, and `updater.log()` appends
+    it to `logs/update.log`, which keeps the last 50 lines.
+  - `App._offer_update()` shows the answer. "Nothing newer", or a version at or below `updates.skip`,
+    hides a bar that is showing, so a pulled release is withdrawn (also when the latest is then a
+    skipped one). An `updates.skip` that is not a version is ignored.
+- **Show:** no `notify()` and no dialog.
+  - `Tray.refresh` swaps in `tray.badged()` copies of the colour and grey icons: a red "!" drawn with
+    Pillow shapes, not a font.
+  - The menu gets "Update to X.Y.Z" and "What's new" at the top; pystray drops the leading separator
+    while they are hidden. While an update runs, the item reads "Updating to X.Y.Z..." (disabled);
+    after a failure, "Update to X.Y.Z failed - open OpenShaker" (`App.update_status()`).
+  - The window packs `App.update_bar` above everything.
+  - Skip this version saves `updates.skip`; only a newer version shows again.
+- **Update now** (`App.update_now`):
+  1. On a source copy (`updater.is_installed_copy()` needs the frozen exe with `unins000.exe` next to
+     it) it opens the release page and stops there.
+  2. It sets the busy guard first. If a game is sending telemetry, it shows the window and asks
+     (`UPDATE_CONFIRM`).
+  3. The worker calls `check()` again. If that is None, another version or a skipped one, it installs
+     nothing: `_update_withdrawn` hides the bar and offers what the answer offers, if anything.
+     Otherwise it calls `updater.download()`.
+     That fetches the `.sha256` and the installer into a new `%TEMP%\OpenShaker-update-*` folder
+     within `max(120 s, size / 50 kB/s)`. `_read` uses `read1()`, which returns after one receive, so
+     a server trickling bytes cannot hold a 64 KiB `read()` (and the deadline check) open.
+     - `url_allowed()` accepts only HTTPS on GitHub's hosts, as the exact authority: no user info and
+       no other port. That is checked on every redirect and on the final URL.
+  4. The size must equal the API's. The SHA-256 must equal the one on the `.sha256` line that names
+     the installer (`<hash>  <name>` or `<hash> *<name>`, UTF-8 with or without a BOM, UTF-16 with a
+     BOM, CRLF or LF). A bare hash is refused. Otherwise the folder is deleted (`updater.discard`,
+     which only ever deletes an `OpenShaker-update-*` folder in `%TEMP%`) and the bar shows why.
+  5. `updater.run_installer()` hashes the file again, then starts it with `Popen([exe, /VERYSILENT,
+     /SUPPRESSMSGBOXES, /NORESTART (, /SHOWWINDOW=1)], shell=False)`, detached. It refuses anything
+     outside an update folder, and any copy that is not installed.
+  6. The app keeps running and holding its mutex, so setup's `InitializeSetup` sees WasRunning, quits
+     the app through `--quit`, installs over it (previous folder) and relaunches it.
+     - `KeepStartup` and `KeepDesktopIcon` write the Run value and the desktop shortcut on a silent
+       update only if they are there already.
+     - `SetupMutex` allows one setup at a time.
+     - If setup stops after it quit the app (`WasRunning` and not `UpdateInstalled`),
+       `DeinitializeSetup` waits up to 30 s for the `OpenShakerRunning` mutex to clear, then starts the
+       installed exe again. After a silent run it passes `--update-failed=<ver>` when no file was
+       replaced yet, or `--update-incomplete=<ver>` once `ssInstall` had begun (`FilesStarted`): Inno
+       keeps no backup of what it overwrote, so the folder may mix two versions. `gui.installer_result()`
+       reads either flag (a value that is no X.Y.Z is dropped). `App._installer_came_back` logs it,
+       shows it in the bar and sets the tray's "Update to X failed - open OpenShaker". A later check
+       replaces the "failed" note with the offer, or hides it; the "incomplete" note, which points to
+       the release page, stays until a check offers an update. An interactive install that is
+       cancelled after `InitializeSetup` quit the app starts it again the same way, `--hidden` and
+       with no flag.
+     - If the mutex is still held after 30 s, the app never quit, so setup starts nothing. The app
+       watches the setup process (`_watch_installer`): if it ends, or `INSTALLER_WAIT_S` (3 min)
+       passes while the app still runs, the bar reports it and Update now works again.
+     - An interactive install over an installed copy sets its two ticks in `CurPageChanged
+       (wpSelectTasks)` from the current Run value and desktop `.lnk`, not from the previous
+       install's tasks (the app's own Start with Windows switch changes the Run value). At
+       `ssPostInstall`, an unticked box deletes that entry. A first install ticks both.
+  7. Old `OpenShaker-update-*` folders are removed at every start, once more than an hour old, whatever
+     the setting. It is local only, and skipped under `OPENSHAKER_OFFLINE`.
+- **Release assets:** build.ps1 writes `dist\OpenShaker-Setup-<ver>.exe.sha256` next to the installer
+  (ASCII, `<lowercase hash>  <name>`, LF). A release needs both files, or no copy is offered it
+  (`update.log` then says which is missing).
+- **No network in tests:** `tests/fakes.py` sets `OPENSHAKER_OFFLINE=1`, and the one network function
+  (`updater._open`) then refuses. A user can set the same variable. `tests/test_updater.py` covers the
+  rest with fakes:
+  - versions, addresses and redirects;
+  - malformed JSON;
+  - `.sha256` encodings;
+  - every download mismatch and the deadline;
+  - installer arguments and the re-hash;
+  - the window side (withdrawn releases, retries, the busy guard, the installer watch, test mode).
+- **Dry run against a fake release:** `sessions/_release/fake_release_server.py` (not shipped) serves
+  an installer as a GitHub-like release on 127.0.0.1, with the redirect. Set `OPENSHAKER_UPDATE_TEST=1`
+  and `OPENSHAKER_UPDATE_API` to its "latest release" URL. Only in this test mode does the updater read
+  that variable and accept `http://127.0.0.1` (no other host), and the bar then says
+  "[update test mode]". Normal use never does.
+
 ## Window, tray and Windows integration
 
 - Tk may only be touched from its own thread. pystray runs its own message loop on a worker thread,
@@ -390,12 +485,15 @@ that every name in `OPTIONAL_PACKAGES` is in both guards.
    - `pystray` collected as plain `.py` files (`module_collection_mode`), because it is LGPL-3.0 and a
      user must be able to replace it;
    - `pystray._win32` as a hidden import;
-   - matplotlib, scipy, soundcard, the developer tools and OpenSSL (`ssl`, `_ssl`, `_hashlib`; the app
-     makes no HTTPS calls) excluded;
+   - matplotlib, scipy, soundcard and the developer tools excluded. Python's `ssl` (OpenSSL) is
+     bundled since 1.0.1, for the update check's HTTPS request (see [Updates](#updates)); its licence
+     is in Python's LICENSE.txt, which the notices include, and the build fails without
+     `_ssl.pyd`, `libssl-3.dll` and `libcrypto-3.dll`;
    - of sounddevice's PortAudio builds only `libportaudio64bit.dll` kept (the `*-asio` builds contain
      Steinberg's ASIO SDK and load only with `SD_ENABLE_ASIO`).
 5. Finds `ISCC.exe` (PATH, the Inno Setup uninstall registry keys, then the per-user and Program Files
-   folders) and compiles `installer/OpenShaker.iss` into `dist\OpenShaker-Setup-<version>.exe`. The
+   folders) and compiles `installer/OpenShaker.iss` into `dist\OpenShaker-Setup-<version>.exe`, then
+   writes its `.sha256` next to it (the release's second asset, see [Updates](#updates)). The
    version comes only from `openshaker/__init__.py`; the .iss refuses to compile without it.
 
 The installer is per-user (`PrivilegesRequired=lowest`, `{autopf}` = `%LOCALAPPDATA%\Programs`) and
@@ -403,9 +501,11 @@ has one screen: the Tasks page - Start with Windows and a desktop shortcut, both
 button (no Welcome, folder, group, Ready or Finished page; without the Ready page Inno labels the Tasks
 page's button Install). It adds a Start-menu shortcut, installs LICENSE (as LICENSE.txt) and
 THIRD-PARTY-NOTICES.txt next to the exe - one copy of each - then starts the app and closes. A silent
-`/SILENT` or `/VERYSILENT` update puts back a tray app it stopped (`--hidden`, only when the
-`OpenShakerRunning` mutex was held before it quit that copy) and starts nothing otherwise. An update keeps the same AppId, folder and the
-previous task choices. `ISCC /O-` compile-checks the script without writing a setup, but still empties
+`/SILENT` or `/VERYSILENT` update puts back the app it stopped (only when the `OpenShakerRunning`
+mutex was held before it quit that copy): in the tray (`--hidden`), or with its window when setup ran
+with `/SHOWWINDOW=1` (the app's own Update now from the window; `RelaunchAfterSilentUpdate(WithWindow)`
+reads `{param:SHOWWINDOW|0}`). It starts nothing otherwise. An update keeps the same AppId, folder and
+the previous task choices. `ISCC /O-` compile-checks the script without writing a setup, but still empties
 the output folder (`dist\`). The uninstaller removes the
 Run value and asks before deleting `%APPDATA%\OpenShaker` (a silent uninstall keeps it). It is not
 code-signed, so SmartScreen warns on first run.

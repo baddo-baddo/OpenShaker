@@ -16,7 +16,7 @@ import webbrowser
 from pathlib import Path
 from tkinter import messagebox, ttk
 
-from . import APP_NAME, FEEDBACK_URL, __version__, config, paths
+from . import APP_NAME, FEEDBACK_URL, REPO_URL, __version__, config, paths, updater
 from .audio import CHANNEL_CHOICES, AudioOutput, DeviceNotFound, channel_choice
 from .effects import REGISTRY
 from .engine import TestTone
@@ -29,6 +29,10 @@ LOST_RETRY_SECONDS = 3.0      # an output that stopped playing is usually back a
 LOST_FAST_WINDOW = 60.0       # so retry that fast for the first minute after it went away
 RETRY_SECONDS = 15.0          # the ButtKicker may still be asleep, or a port still held, at boot
 TONE_SECONDS, TONE_LOW, TONE_HIGH, TONE_AMP = 5.0, 25.0, 70.0, 0.8
+WRAP_MIN = 520                # px: the status and source lines wrap here at the least, wider as the window grows
+UPDATE_BG = "#fff4ce"         # the update bar's soft yellow
+UPDATE_CONFIRM = "Haptics will stop for about 15 seconds while OpenShaker updates. Update now?"
+INSTALLER_WAIT_S = 180.0      # an update installer that has not closed the app by then did not work
 HAPTICS_OFF_MSG = ("Haptics are switched off: nothing plays, and the game ports are free for other programs. "
                    "Tick Haptics on (here or in the tray menu) to turn them back on.")
 EFFECT_LABELS = {
@@ -220,7 +224,8 @@ class App:
     DEFAULT_OUTPUT = "(Windows default output)"
 
     def __init__(self, root: tk.Tk, cfg: dict, config_path: str, hidden: bool = False,
-                 start_haptics: bool = False, use_tray: bool = True, ask_startup: bool = True) -> None:
+                 start_haptics: bool = False, use_tray: bool = True, ask_startup: bool = True,
+                 update_result: tuple | None = None) -> None:
         self.root = root
         self.cfg = cfg
         self.config_path = config_path
@@ -252,6 +257,16 @@ class App:
         self._save_error = ""
         self._saved_switch = cfg.get("haptics_on", True) is not False    # what config.json says right now
         self._boxes: dict = {"open": None}       # the number box being typed into, if any
+        # updates (updater.py): what is available, as a plain string pystray's thread can read
+        self.update_release: updater.Release | None = None
+        self._update_version = ""
+        self._update_state = ""                  # "", "busy" or "failed": the tray's item reads it
+        self._update_sticky = False              # the bar says an update stopped partway: a check keeps it
+        self._update_busy = False
+        self._update_job = None
+        self._update_retries = 0                 # network failures in a row (sooner retries)
+        self._installer_watch = None             # (process, started) of a running update installer
+        self.update_error = ""                   # the last check's problem, if any; also in logs/update.log
         # optional outputs (outputs.py): absent package = nothing here at all
         try:
             found, problems = load_optional_outputs()           # guards itself; this guards the guard
@@ -282,13 +297,28 @@ class App:
         style.configure("Status.TLabel", font=("Segoe UI", 10))
         style.configure("Tele.TLabel", font=("Consolas", 10))
         style.configure("Head.TLabel", font=("Segoe UI", 10, "bold"))
+        style.configure("Update.TFrame", background=UPDATE_BG)
+        style.configure("Update.TLabel", background=UPDATE_BG, font=("Segoe UI", 10, "bold"))
 
         outer = ttk.Frame(root, padding=12)
         outer.pack(fill="both", expand=True)
 
+        # -- the update bar: packed above everything only while an update is available ------------
+        self.update_bar = ttk.Frame(outer, style="Update.TFrame", padding=(8, 4))
+        self.update_var = tk.StringVar(value="")
+        ttk.Label(self.update_bar, textvariable=self.update_var, style="Update.TLabel",
+                  wraplength=WRAP_MIN - 220).pack(side="left")
+        self.update_buttons = {}
+        for key, text, command in (("skip", "Skip this version", self.skip_update),
+                                   ("news", "What's new", self.open_whats_new),
+                                   ("now", "Update now", self.update_now)):
+            self.update_buttons[key] = ttk.Button(self.update_bar, text=text, command=command)
+            self.update_buttons[key].pack(side="right", padx=(6, 0))
+
         # -- top: the haptics switch / mode ------------------------------------------------
         top = ttk.Frame(outer)
         top.pack(fill="x")
+        self._top_frame = top
         self.haptics_var = tk.BooleanVar(value=self.haptics_on)
         self.haptics_box = ttk.Checkbutton(top, text="Haptics on", style="Big.TCheckbutton",
                                            variable=self.haptics_var,
@@ -318,7 +348,8 @@ class App:
                         command=self.toggle_windows_startup).pack(side="left")
 
         self.status_var = tk.StringVar(value="Stopped")
-        ttk.Label(outer, textvariable=self.status_var, style="Status.TLabel").pack(anchor="w", pady=(8, 0))
+        self.status_label = ttk.Label(outer, textvariable=self.status_var, style="Status.TLabel", wraplength=WRAP_MIN)
+        self.status_label.pack(anchor="w", pady=(8, 0))
 
         # -- telemetry --------------------------------------------------------------------
         tele = ttk.LabelFrame(outer, text="Telemetry", padding=8)
@@ -337,7 +368,11 @@ class App:
             self.tele_vars[key] = v
             ttk.Label(cell, textvariable=v, style="Tele.TLabel", width=11).pack(side="left")
         self.sources_var = tk.StringVar(value="")
-        ttk.Label(tele, textvariable=self.sources_var, foreground="#555").grid(row=3, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        self.sources_label = ttk.Label(tele, textvariable=self.sources_var, foreground="#555", wraplength=WRAP_MIN,
+                                       justify="left")
+        self.sources_label.grid(row=3, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        # long status and source lines wrap at the window's width instead of widening the window
+        outer.bind("<Configure>", self._rewrap, add="+")
 
         # -- output -------------------------------------------------------------------------
         out = ttk.LabelFrame(outer, text="Output", padding=8)
@@ -428,6 +463,11 @@ class App:
         root.protocol("WM_DELETE_WINDOW", self.on_close)
         root.bind("<Button-1>", self._click_away, add="+")   # clicking elsewhere applies an open number box
         root.after(200, self.poll)
+        self._schedule_update_check(updater.CHECK_DELAY_S)
+        if not updater.offline():                 # local only: old update folders in %TEMP%, any setting
+            threading.Thread(target=updater.clean_old_downloads, name="update-cleanup", daemon=True).start()
+        if update_result:                         # setup started this copy again after a stopped update
+            self._installer_came_back(*update_result)
         if hidden and self.tray is not None and self.tray.active:
             root.withdraw()                       # started by Windows: live in the tray only
         elif hidden:
@@ -594,6 +634,226 @@ class App:
         if not opened:
             self.msg_var.set(f"Could not open a browser. To report a bug or send feedback, go to {FEEDBACK_URL}")
 
+    # -- updates (updater.py): a badge and a bar, never a pop-up --------------------------------
+    def updates_enabled(self) -> bool:
+        return bool((self.cfg.get("updates") or {}).get("check", True))
+
+    def update_version(self) -> str:
+        """The version an update is available to, or "". Read by pystray's thread: a plain string."""
+        return self._update_version
+
+    def update_status(self) -> str:
+        """"", "busy" (downloading or installing) or "failed": the tray's update item reads it."""
+        return self._update_state
+
+    def _schedule_update_check(self, delay_s: float) -> None:
+        if self._update_job is not None:
+            try:
+                self.root.after_cancel(self._update_job)
+            except tk.TclError:
+                pass
+            self._update_job = None
+        if self.updates_enabled():
+            self._update_job = self.root.after(int(delay_s * 1000), self._start_update_check)
+
+    def _start_update_check(self) -> None:
+        """~30 s after start, then daily (sooner after a network failure): ask GitHub on a worker thread.
+        The next check is scheduled once this one has answered; this 24 h one is the fallback."""
+        self._update_job = None
+        if not self.updates_enabled():
+            return
+        threading.Thread(target=self._update_worker, name="update-check", daemon=True).start()
+        self._schedule_update_check(updater.CHECK_EVERY_S)
+
+    def _update_worker(self) -> None:
+        release, error, network = None, "", False
+        try:
+            release = updater.check()
+        except Exception as exc:                  # offline, rate-limited, a broken release: quietly
+            error, network = f"{type(exc).__name__}: {exc}", isinstance(exc, (updater.NetworkError, OSError))
+        self.run_on_ui(lambda: self._update_checked(release, error, network))
+
+    def _skipped(self, version: str) -> bool:
+        """Skip this version was clicked for `version` or a newer one (a skip that is no version: no)."""
+        skip = (self.cfg.get("updates") or {}).get("skip") or ""
+        return bool(updater.parse_version(skip)) and not updater.is_newer(version, skip)
+
+    def _update_checked(self, release, error: str = "", network: bool = False) -> None:
+        self.update_error = error
+        if error:
+            updater.log(f"check failed: {error}")
+            self._update_retries = self._update_retries + 1 if network else 0
+        else:
+            self._update_retries = 0
+        if self.updates_enabled():                # after a network failure try again sooner, else daily
+            retry = updater.RETRY_AFTER_S
+            self._schedule_update_check(retry[self._update_retries - 1] if 0 < self._update_retries <= len(retry)
+                                        else updater.CHECK_EVERY_S)
+        if error or not self.updates_enabled() or self._update_busy:
+            return
+        self._offer_update(release)
+
+    def _offer_update(self, release) -> None:
+        """Show `release` in the bar and the tray. None (GitHub has nothing newer: a pulled release too) or
+        a skipped version hides whatever the bar shows, except the note that an update stopped partway."""
+        if release is not None and self._skipped(release.version):
+            release = None                        # skipped, and nothing newer than the skipped one
+        if release is None:
+            if not self._update_sticky and (self._update_version or self.update_bar.winfo_manager()):
+                self._hide_update()
+            return
+        self.update_release, self._update_sticky = release, False
+        self._update_version, self._update_state = release.version, ""
+        self._show_update(f"{APP_NAME} {release.version} is available (you have {__version__}).")
+
+    def _installer_came_back(self, how: str, version: str) -> None:
+        """Setup quit this app for a silent update, stopped, and started this copy again: with
+        --update-failed=X when no file had been replaced (it is offered again), --update-incomplete=X when
+        it stopped partway through the files, which may now be a mix of two versions."""
+        self._update_version, self._update_state = version, "failed"    # "Update to X failed - open ..."
+        target = version or "the new version"
+        if how == "incomplete":
+            updater.log(f"update to {version or '?'} stopped partway through its files; setup started "
+                        f"{__version__} again")
+            self._update_sticky = True
+            self._show_update(f"The update to {target} stopped partway, so {APP_NAME}'s files may be a mix of "
+                              f"two versions. To repair it, run the installer from the release page "
+                              f"(What's new).", buttons=("news",))
+        else:
+            updater.log(f"update to {version or '?'} failed; setup started {__version__} again")
+            self._show_update(f"The update to {target} did not install, so {APP_NAME} {__version__} was "
+                              f"started again. It will be offered again.", buttons=False)
+
+    def _show_update(self, text: str, buttons: bool | tuple = True) -> None:
+        """buttons: True = all three while a release is offered, False = none, a tuple = just those."""
+        self.update_var.set(text + (" [update test mode]" if updater.test_mode() else ""))
+        for name, button in self.update_buttons.items():
+            on = name in buttons if isinstance(buttons, tuple) else buttons and self.update_release is not None
+            button.state(["!disabled"] if on else ["disabled"])
+        if not self.update_bar.winfo_manager():
+            self.update_bar.pack(fill="x", pady=(0, 10), before=self._top_frame)
+        self._refresh_tray(force=True)            # the badge and the menu items
+
+    def _hide_update(self) -> None:
+        self.update_release, self._update_version, self._update_state = None, "", ""
+        self._update_sticky = False
+        self.update_bar.pack_forget()
+        self._refresh_tray(force=True)
+
+    def open_whats_new(self) -> None:
+        if self.update_release is not None:
+            url = self.update_release.page_url
+        elif updater.parse_version(self._update_version):       # after a stopped update: that release
+            url = f"{REPO_URL}/releases/tag/v{self._update_version}"
+        else:
+            url = f"{REPO_URL}/releases"
+        try:
+            opened = webbrowser.open(url)
+        except Exception:
+            opened = False
+        if not opened:
+            self.msg_var.set(f"Could not open a browser. The release notes are at {url}")
+
+    def skip_update(self) -> None:
+        """Hide this version's badge and bar for good; a newer version shows them again."""
+        if self.update_release is None or self._update_busy:
+            return
+        self.cfg.setdefault("updates", {})["skip"] = self.update_release.version
+        self._save_now()
+        self._hide_update()
+
+    def update_from_tray(self) -> None:
+        if self._update_state == "failed":        # "Update to X failed - open OpenShaker"
+            self.show_window()
+            return
+        self.update_now(from_window=False)
+
+    def _game_sending(self) -> bool:
+        tele = (self._last_status or {}).get("tele")
+        return tele is not None and bool(getattr(tele, "active", True))
+
+    def update_now(self, from_window: bool = True) -> None:
+        """Download, verify and run the new installer (installed copies only). The installer closes this
+        app and starts it again - with its window when the click came from the window."""
+        release = self.update_release
+        if release is None or self._update_busy:
+            return
+        if not updater.is_installed_copy():
+            self.open_whats_new()                 # a source copy: the release page instead
+            self._show_update(f"This copy runs from source, so it cannot update itself: get "
+                              f"{APP_NAME} {release.version} from the release page.")
+            return
+        self._update_busy = True                  # before asking: a second click cannot start a second update
+        if self._game_sending():
+            self.show_window()                    # never a question hidden behind a full-screen game
+            if not messagebox.askyesno(f"Update {APP_NAME}", UPDATE_CONFIRM, parent=self.root) \
+                    or self.update_release is not release:
+                self._update_busy = False
+                return
+        self._update_state = "busy"
+        self._show_update(f"Downloading {APP_NAME} {release.version} ...", buttons=False)
+        threading.Thread(target=self._update_download_worker, args=(release, from_window), name="update",
+                         daemon=True).start()
+
+    def _update_download_worker(self, release, show_window: bool) -> None:
+        try:
+            fresh = updater.check()               # still offered, and still the version clicked?
+            if fresh is None or fresh.version != release.version or self._skipped(fresh.version):
+                self.run_on_ui(lambda: self._update_withdrawn(release, fresh))
+                return
+            verified = updater.download(fresh)
+        except Exception as exc:
+            error = str(exc)                      # `exc` is gone once the except block ends
+            self.run_on_ui(lambda: self._update_failed(error))
+            return
+        self.run_on_ui(lambda: self._install_update(fresh, verified, show_window))
+
+    def _update_withdrawn(self, release, fresh=None) -> None:
+        """GitHub no longer offers the version clicked (pulled, or replaced): install nothing, and offer
+        what it offers now - unless that is nothing, or a skipped version."""
+        self._update_busy = False
+        self._hide_update()
+        self._offer_update(fresh)
+        self.msg_var.set(f"{APP_NAME} {release.version} is no longer offered, so nothing was installed.")
+
+    def _install_update(self, release, verified, show_window: bool) -> None:
+        self.update_release, self._update_version = release, release.version
+        try:
+            process = updater.run_installer(verified, show_window)
+        except Exception as exc:
+            updater.discard(verified.path)
+            self._update_failed(str(exc))
+            return
+        self._show_update(f"Installing {APP_NAME} {release.version}: it closes and comes back by itself in a few "
+                          f"seconds.", buttons=False)
+        self._installer_watch = (process, time.monotonic())
+        self.root.after(2000, self._watch_installer)
+
+    def _watch_installer(self) -> None:
+        """The installer quits this app when it works. If it ends first, or takes too long, say so."""
+        if self._installer_watch is None:
+            return
+        process, started = self._installer_watch
+        try:
+            code = process.poll()
+        except Exception:
+            code = None
+        if code is not None:
+            self._installer_watch = None
+            self._update_failed(f"the installer ended without updating (exit code {code})")
+        elif time.monotonic() - started > INSTALLER_WAIT_S:
+            self._installer_watch = None
+            self._update_failed("the installer did not finish")
+        else:
+            self.root.after(2000, self._watch_installer)
+
+    def _update_failed(self, error: str) -> None:
+        self._update_busy, self._update_state = False, "failed"
+        release = self.update_release
+        updater.log(f"update to {release.version if release else '?'} failed: {error}")
+        self._show_update(f"Update to {release.version if release else 'the new version'} failed: {error}. "
+                          f"Nothing was installed; Update now tries again.")
+
     # -- output device ----------------------------------------------------------------------
     def _device_label(self, name: str) -> str:
         return name if str(name or "").strip() else self.DEFAULT_OUTPUT
@@ -738,6 +998,7 @@ class App:
         ("Trackmania Data Sender port", ("sources", "trackmania", "port"), int),
         ("Forza listen address (0.0.0.0 also takes an Xbox or another PC)", ("sources", "forza", "host"), str),
         ("Output channel", ("audio", "channels"), "channel"),
+        ("Check for updates (asks GitHub once a day)", ("updates", "check"), bool),
     ]
 
     def _cfg_at(self, path: tuple):
@@ -761,6 +1022,9 @@ class App:
                 var = tk.StringVar(value=channel_choice(node.get(key)))
                 ttk.Combobox(frame, textvariable=var, state="readonly", width=22,
                              values=list(CHANNEL_CHOICES)).grid(row=row, column=1, sticky="we", padx=(12, 0))
+            elif cast is bool:
+                var = tk.BooleanVar(value=node.get(key, True) is not False)
+                ttk.Checkbutton(frame, variable=var).grid(row=row, column=1, sticky="w", padx=(12, 0))
             else:
                 var = tk.StringVar(value=str(node.get(key, "")))
                 ttk.Entry(frame, textvariable=var, width=24).grid(row=row, column=1, sticky="we", padx=(12, 0))
@@ -776,6 +1040,9 @@ class App:
                 values = []
                 for path, cast, var in entries:
                     node, key = self._cfg_at(path)
+                    if cast is bool:
+                        values.append(((node, key), bool(var.get())))
+                        continue
                     raw = var.get().strip()
                     if cast == "channel":
                         value = list(CHANNEL_CHOICES.get(raw, node.get(key) or [0]))
@@ -797,6 +1064,12 @@ class App:
         for (node, key), value in values:
             node[key] = value
         self._save_now()
+        if not self.updates_enabled():
+            self._schedule_update_check(0)            # off: cancels the next check; nothing asks GitHub
+            if self.update_release is not None and not self._update_busy:
+                self._hide_update()
+        elif self._update_job is None:
+            self._schedule_update_check(updater.CHECK_DELAY_S)
         self._restart_if_on()
         self.msg_var.set("Advanced settings saved and applied." if self.haptics_on else
                          "Advanced settings saved; they apply when the haptics are switched on.")
@@ -963,8 +1236,8 @@ class App:
         if st["audio_error"]:
             self.status_var.set(f"Audio error: {st['audio_error']}")
 
-        self.sources_var.set("   ".join(f"{SOURCE_LABELS.get(s['name'], s['name'])}: {s['status']}"
-                                        for s in st["sources"]))
+        self.sources_var.set("\n".join(f"{SOURCE_LABELS.get(s['name'], s['name'])}: {s['status']}"
+                                       for s in st["sources"]))          # one game per line
         tele = st["tele"]
         if tele is None:
             self.src_var.set("no game detected (waiting for telemetry)")
@@ -991,6 +1264,15 @@ class App:
         self.level_var.set("-inf dB" if db <= -100 else f"{db:5.1f} dB")
         for name, bar in self.effect_bars.items():
             bar["value"] = min(1.0, st["levels"].get(name, 0.0))
+
+    def _rewrap(self, event) -> None:
+        """The window's content changed size: wrap the status and source lines at its width, so a long line
+        (Trackmania's "waiting for Openplanet Data Sender ..." one) never makes the window wider."""
+        width = max(WRAP_MIN, int(event.width) - 40)
+        if width != getattr(self, "_wrap_width", None):
+            self._wrap_width = width
+            for label in (self.status_label, self.sources_label):
+                label.configure(wraplength=width)
 
     # -- tray-facing API -----------------------------------------------------------------------
     def run_on_ui(self, fn) -> None:
@@ -1227,10 +1509,11 @@ def ensure_tcl() -> None:
 
 
 def run_gui(cfg: dict, config_path: str, hidden: bool = False, start_haptics: bool = True,
-            use_tray: bool = True, listener=None) -> int:
+            use_tray: bool = True, listener=None, update_result: tuple | None = None) -> int:
     ensure_tcl()
     root = tk.Tk()
-    app = App(root, cfg, config_path, hidden=hidden, start_haptics=start_haptics, use_tray=use_tray)
+    app = App(root, cfg, config_path, hidden=hidden, start_haptics=start_haptics, use_tray=use_tray,
+              update_result=update_result)
     if listener is not None:
         connect_listener(app, listener)
     root.mainloop()
@@ -1286,6 +1569,19 @@ def _startup_failure(message: str, details: str | None = None) -> None:
         pass
 
 
+def installer_result(args) -> tuple | None:
+    """("failed" or "incomplete", "X.Y.Z" or "") from --update-failed=X.Y.Z / --update-incomplete=X.Y.Z,
+    which setup passes when it starts this copy again after a silent update stopped (see DeinitializeSetup
+    in installer/OpenShaker.iss). A value that is no X.Y.Z version is dropped."""
+    for arg in args:
+        for how in ("failed", "incomplete"):
+            flag = f"--update-{how}"
+            if arg == flag or arg.startswith(flag + "="):
+                version = updater.parse_version(arg[len(flag) + 1:])
+                return how, ".".join(map(str, version)) if version else ""
+    return None
+
+
 def main(argv=None) -> int:
     """Entry for OpenShaker.exe and openshaker/app.pyw. Errors go to logs/gui_error.log in the settings folder.
 
@@ -1294,6 +1590,10 @@ def main(argv=None) -> int:
                 the calibration tools); the saved switch is left as it is
     --no-tray   window only, no notification-area icon
     --quit      ask a running copy to quit, wait until it has gone, and exit (the installer uses it)
+    --update-failed=X.Y.Z      setup started this copy again after a silent update to X.Y.Z failed before
+                               replacing any file: the bar says so, and the update is offered again
+    --update-incomplete=X.Y.Z  ... after it stopped partway through the files: the bar asks for the
+                               installer to be run again from the release page
     """
     from . import config, single_instance
     args = list(sys.argv[1:] if argv is None else argv)
@@ -1318,7 +1618,8 @@ def main(argv=None) -> int:
         paths.migrate_config()                 # settings from an earlier version, copied once
         return run_gui(config.load(config_path), config_path,
                        hidden="--hidden" in args, start_haptics="--no-start" not in args,
-                       use_tray="--no-tray" not in args, listener=listener)
+                       use_tray="--no-tray" not in args, listener=listener,
+                       update_result=installer_result(args))
     except Exception:
         _startup_failure(f"{APP_NAME} failed to start.", traceback.format_exc())
         return 1

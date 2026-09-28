@@ -8,11 +8,11 @@ The tray icon's right-click menu, item by item, and the notifications OpenShaker
 
 ## Icon and tooltip
 
-The icon is in colour while the haptics run and grey otherwise; hovering shows the state. Details on [Is it working?](Is-It-Working.md#the-tray-icon). **Left-click** opens the window.
+The icon is in colour while the haptics run and grey otherwise; hovering shows the state. Details on [Is it working?](Is-It-Working.md#the-tray-icon). A small red **!** means an update is available ([Updating](Start-With-Windows-Updates-and-Uninstalling.md#updating)). **Left-click** opens the window.
 
 ## Menu items
 
-Right-click the icon for the menu:
+Right-click the icon for the menu. When a newer version is available, two items come first: **Update to X.Y.Z** (downloads, checks and installs it, then OpenShaker comes back in the tray) and **What's new** (the release page in your browser); see [Updating](Start-With-Windows-Updates-and-Uninstalling.md#updating). Then:
 
 1. **Open OpenShaker** shows the window and brings it to the front.
 2. **Status lines** (grey, for reading only; refreshed about once a second):
@@ -37,6 +37,8 @@ While the window is hidden, OpenShaker uses tray notifications to tell you about
 - an error when switching the haptics on or restarting them fails (the automatic retries stay quiet);
 - the Haptics on switch not being saved;
 - the first time you close the window (see [Closing the window](The-Main-Window.md#closing-the-window)).
+
+An available update never shows a notification: only the badge, the two menu items and the window's bar.
 
 ---
 

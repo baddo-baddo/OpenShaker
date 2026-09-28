@@ -42,6 +42,8 @@ ArchitecturesInstallIn64BitMode=x64compatible
 ; the running app holds this mutex, so setup and the uninstaller ask the user to quit it first. Before
 ; that check, InitializeSetup / InitializeUninstall ask an installed copy to quit by itself (--quit).
 AppMutex=OpenShakerRunning
+; one setup at a time (the app's Update now could otherwise start a second one)
+SetupMutex=OpenShakerSetup
 CloseApplications=yes
 RestartApplications=no
 
@@ -60,23 +62,33 @@ Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreve
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
+; a silent update keeps the user's current choice: no shortcut comes back that was deleted since
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon; Check: KeepDesktopIcon
 
 [Registry]
-; the startup entry the app itself reads and writes (same name, same command)
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#AppName}"; ValueData: """{app}\{#AppExe}"" --hidden"; Flags: uninsdeletevalue; Tasks: startup
+; the startup entry the app itself reads and writes (same name, same command); a silent update keeps the
+; user's current choice, so Start with Windows switched off in the app stays off
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#AppName}"; ValueData: """{app}\{#AppExe}"" --hidden"; Flags: uninsdeletevalue; Tasks: startup; Check: KeepStartup
 ; the entry an earlier version registered under its old name, so Windows never starts two copies
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "ButtKicker Haptics"; Flags: deletevalue dontcreatekey
 
 [Run]
 ; starts the app as soon as the files are in (there is no Finished page to tick it on); a silent update
-; (/SILENT, /VERYSILENT) puts back the tray app it stopped, in the tray, and starts nothing it did not stop
+; (/SILENT, /VERYSILENT) puts back the app it stopped - in the tray, or with its window when the app's own
+; Update now button asked for that (/SHOWWINDOW=1) - and starts nothing it did not stop
 Filename: "{app}\{#AppExe}"; Flags: nowait skipifsilent
-Filename: "{app}\{#AppExe}"; Parameters: "--hidden"; Flags: nowait; Check: RelaunchAfterSilentUpdate
+Filename: "{app}\{#AppExe}"; Parameters: "--hidden"; Flags: nowait; Check: RelaunchAfterSilentUpdate(False)
+Filename: "{app}\{#AppExe}"; Flags: nowait; Check: RelaunchAfterSilentUpdate(True)
 
 [Code]
+const
+  RunKey = 'Software\Microsoft\Windows\CurrentVersion\Run';
+
 var
-  WasRunning: Boolean;
+  WasRunning: Boolean;        { the app held its mutex when setup started (and setup quit it) }
+  FilesStarted: Boolean;      { setup began replacing files (ssInstall) }
+  UpdateInstalled: Boolean;   { ... and finished them (ssPostInstall) }
+  TasksFromNow: Boolean;      { the Tasks page's ticks were set from the current state once }
 
 function InstalledExe(): String;
 var
@@ -98,7 +110,8 @@ begin
 end;
 
 { Both run before Inno Setup's AppMutex check (verified), so an update or uninstall does not stop at
-  "OpenShaker is running". A copy run from source is not quit; the AppMutex message covers it. }
+  "OpenShaker is running". The installed exe's --quit asks whichever copy holds the app's local port to
+  quit, so a copy run from source quits too; without an installed exe the AppMutex message covers it. }
 function InitializeSetup(): Boolean;
 begin
   { the running app holds this mutex (the same name as AppMutex): note it before quitting that copy }
@@ -107,9 +120,108 @@ begin
   Result := True;
 end;
 
-function RelaunchAfterSilentUpdate(): Boolean;
+{ The app's Update now runs this setup with /VERYSILENT and keeps running (holding the mutex) until
+  InitializeSetup has noted it and asked it to quit, so WasRunning is true for an update it started. }
+function RelaunchAfterSilentUpdate(WithWindow: Boolean): Boolean;
 begin
-  Result := WizardSilent and WasRunning;
+  Result := WizardSilent and WasRunning and ((ExpandConstant('{param:SHOWWINDOW|0}') = '1') = WithWindow);
+end;
+
+function DesktopLink(): String;
+begin
+  Result := ExpandConstant('{autodesktop}\{#AppName}.lnk');
+end;
+
+{ A silent update (the app's Update now) keeps what the user has now: Start with Windows and the desktop
+  shortcut are written only if they are there already. An interactive install follows the ticks, and a
+  first install ticks both. }
+function IsSilentUpdate(): Boolean;
+begin
+  Result := WizardSilent and (InstalledExe() <> '');
+end;
+
+function KeepStartup(): Boolean;
+begin
+  Result := (not IsSilentUpdate()) or RegValueExists(HKEY_CURRENT_USER, RunKey, '{#AppName}');
+end;
+
+function KeepDesktopIcon(): Boolean;
+begin
+  Result := (not IsSilentUpdate()) or FileExists(DesktopLink());
+end;
+
+{ An interactive install over an installed copy starts its two ticks from how things are now - not from
+  the previous install's choices, which the app's own Start with Windows switch may have changed since -
+  and an unticked box removes its entry (CurStepChanged). }
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if (CurPageID = wpSelectTasks) and (not TasksFromNow) and (InstalledExe() <> '') then
+  begin
+    TasksFromNow := True;
+    if RegValueExists(HKEY_CURRENT_USER, RunKey, '{#AppName}') then
+      WizardSelectTasks('startup')
+    else
+      WizardSelectTasks('!startup');
+    if FileExists(DesktopLink()) then
+      WizardSelectTasks('desktopicon')
+    else
+      WizardSelectTasks('!desktopicon');
+  end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssInstall then
+    FilesStarted := True;
+  if CurStep = ssPostInstall then
+  begin
+    UpdateInstalled := True;
+    if not WizardSilent then
+    begin
+      if not WizardIsTaskSelected('startup') then
+        RegDeleteValue(HKEY_CURRENT_USER, RunKey, '{#AppName}');
+      if not WizardIsTaskSelected('desktopicon') then
+        DeleteFile(DesktopLink());
+    end;
+  end;
+end;
+
+{ Setup quit the running app (InitializeSetup) and then stopped without finishing: cancelled, or a silent
+  update that failed - the app closed too slowly for the AppMutex check, a file was locked, the disk was
+  full. Wait up to 30 s for that app to be gone, then start the installed copy again, so nobody is left
+  with nothing running. After a silent update it says why in its bar: --update-failed when no file was
+  replaced yet, --update-incomplete when setup stopped partway through its files (Inno keeps no copy of
+  what it overwrote, so the folder may then mix old and new files and needs the installer run again).
+  If the app never lets go of its mutex, it is still running, and its installer watch reports it. }
+procedure DeinitializeSetup();
+var
+  Exe, Params: String;
+  Waited, ResultCode: Integer;
+begin
+  if (not WasRunning) or UpdateInstalled then
+    Exit;
+  Exe := InstalledExe();
+  if (Exe = '') or (not FileExists(Exe)) then
+    Exit;
+  Waited := 0;
+  while CheckForMutexes('OpenShakerRunning') and (Waited < 30000) do
+  begin
+    Sleep(250);
+    Waited := Waited + 250;
+  end;
+  if CheckForMutexes('OpenShakerRunning') then
+    Exit;
+  Params := '';
+  if WizardSilent then
+  begin
+    if FilesStarted then
+      Params := '--update-incomplete={#AppVersion}'
+    else
+      Params := '--update-failed={#AppVersion}';
+  end;
+  if (not WizardSilent) or (ExpandConstant('{param:SHOWWINDOW|0}') <> '1') then
+    Params := Trim('--hidden ' + Params);
+  Exec(Exe, Params, '', SW_SHOWNORMAL, ewNoWait, ResultCode);
 end;
 
 function InitializeUninstall(): Boolean;

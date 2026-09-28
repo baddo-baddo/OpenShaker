@@ -14,11 +14,11 @@ from . import APP_NAME
 
 try:
     import pystray
-    from PIL import Image, ImageOps
+    from PIL import Image, ImageDraw, ImageOps
     IMPORT_ERROR = None
 except Exception as exc:                              # pystray/Pillow missing: the window still works
     pystray = None
-    Image = ImageOps = None
+    Image = ImageDraw = ImageOps = None
     IMPORT_ERROR = exc
 
 AVAILABLE = IMPORT_ERROR is None
@@ -33,6 +33,22 @@ def _images(icon_path: Path):
     r, g, b, alpha = base.split()
     grey = ImageOps.grayscale(Image.merge("RGB", (r, g, b)))
     return base, Image.merge("RGBA", (grey, grey, grey, alpha))
+
+
+def badged(img):
+    """`img` with a small red "!" badge in the bottom-right corner: an update is available. Drawn from
+    shapes, not a font, so it looks the same on every PC."""
+    out = img.copy()
+    size = min(out.size)
+    d = max(8, int(size * 0.5))                       # badge diameter
+    x0, y0 = out.width - d, out.height - d
+    draw = ImageDraw.Draw(out)
+    draw.ellipse((x0, y0, x0 + d - 1, y0 + d - 1), fill=(215, 38, 38, 255), outline=(255, 255, 255, 255),
+                 width=max(1, d // 12))
+    cx, w = x0 + d / 2, max(2, d // 7)                # the "!": a bar and a dot
+    draw.rectangle((cx - w / 2, y0 + d * 0.2, cx + w / 2 - 1, y0 + d * 0.58), fill=(255, 255, 255, 255))
+    draw.rectangle((cx - w / 2, y0 + d * 0.68, cx + w / 2 - 1, y0 + d * 0.68 + w - 1), fill=(255, 255, 255, 255))
+    return out
 
 
 class Tray:
@@ -50,6 +66,8 @@ class Tray:
             return
         try:
             self._running_img, self._stopped_img = _images(icon_path)
+            self._badged = {id(self._running_img): badged(self._running_img),
+                            id(self._stopped_img): badged(self._stopped_img)}
             self.icon = pystray.Icon("openshaker", self._stopped_img, APP_NAME, self._menu())
         except Exception as exc:
             self.icon = None
@@ -78,10 +96,37 @@ class Tray:
             items.append(item(stop_label(output), lambda *_a, o=output: self.app.stop_output(o)))
         return items
 
+    def _update_version(self) -> str:
+        """The version an update is available to, or "" (thread-safe: a plain string on the App)."""
+        try:
+            return str(self.app.update_version() or "")
+        except Exception:
+            return ""
+
+    def _update_status(self) -> str:
+        try:
+            return str(self.app.update_status() or "")
+        except Exception:
+            return ""
+
+    def _update_label(self) -> str:
+        """What the update item says: it follows an update the user started, never with a notify()."""
+        version, status = self._update_version(), self._update_status()
+        if status == "busy":
+            return f"Updating to {version}..."
+        if status == "failed":
+            return f"Update to {version} failed - open {APP_NAME}"
+        return f"Update to {version}"
+
     def _menu(self):
         item, menu = pystray.MenuItem, pystray.Menu
         nothing = lambda *_a: None                                                  # noqa: E731
         return menu(
+            # only while an update is available (a leading separator is dropped by pystray otherwise)
+            item(lambda _i: self._update_label(), self._ui(self.app.update_from_tray),
+                 enabled=lambda _i: self._update_status() != "busy", visible=lambda _i: bool(self._update_version())),
+            item("What's new", self._ui(self.app.open_whats_new), visible=lambda _i: bool(self._update_version())),
+            menu.SEPARATOR,
             # default=True is what a single left click triggers
             item(f"Open {APP_NAME}", self._ui(self.app.show_window), default=True),
             menu.SEPARATOR,
@@ -137,8 +182,12 @@ class Tray:
                 self.icon.title = title[:127]                 # Win32 tooltips stop at 128 chars
                 self._last_title = title
             want = self._running_img if running else self._stopped_img
+            update = self._update_version()
+            if update:
+                want = self._badged[id(want)]
             if want is not getattr(self.icon, "icon", None):
                 self.icon.icon = want
+            lines = (*lines, update, self._update_status())   # an update appearing or moving on rebuilds it
             if lines != self._last_lines:
                 self._last_lines = lines
                 self.icon.update_menu()

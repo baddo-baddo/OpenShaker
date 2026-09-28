@@ -21,6 +21,7 @@ The line under **Start with Windows** in the window shows the state of the hapti
 
 - The icon is **in colour while the haptics are running**. It is **grey** while starting, stopped, failed or switched off.
 - Hovering over it shows `OpenShaker - running - <game or "no game">`, `OpenShaker - starting`, `OpenShaker - NOT running` or `OpenShaker - haptics off`.
+- A small red **!** in the corner means a newer version is available; see [Updating](Start-With-Windows-Updates-and-Uninstalling.md#updating).
 - **Left-click** opens the window.
 
 ## The preset follows the game

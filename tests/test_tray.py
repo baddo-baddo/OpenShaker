@@ -123,9 +123,16 @@ class FakeApp:
         self.running = False
         self.manual = False
         self.haptics_on = True
+        self.update = ""                          # the version an update is available to, if any
         self.calls = []
         self.lines = {"state": "Haptics: stopped", "game": "Game: none detected",
                       "profile": "Profile: forza_motorsport", "output": "Output: silent", "error": ""}
+
+    def update_version(self):
+        return self.update
+
+    def update_status(self):
+        return ""
 
     def run_on_ui(self, fn):
         self.calls.append(fn.__name__)
@@ -146,6 +153,8 @@ class FakeApp:
     def toggle_windows_startup(self): pass
     def open_folder(self): pass
     def open_feedback(self): pass
+    def update_from_tray(self): pass
+    def open_whats_new(self): pass
     def quit_app(self): pass
 
 
@@ -156,10 +165,11 @@ class FakeIcon:
     def __init__(self, name, icon=None, title=None, menu=None):
         self.name, self.icon, self.title, self.menu = name, icon, title, menu
         self.menu_builds = 0
+        self.notified = []
 
     def update_menu(self):
         self.menu_builds += 1
-    def notify(self, message, title=None): pass
+    def notify(self, message, title=None): self.notified.append(message)
     def run(self): pass
     def stop(self): pass
 
@@ -207,6 +217,31 @@ class TrayMenuTests(unittest.TestCase):
         switch(self.tray.icon)
         self.assertEqual(self.app.calls, ["toggle_haptics"], "handed to the Tk thread, never run on pystray's")
         self.assertLess(texts.index("Haptics on"), texts.index("Restart haptics"))
+
+    def test_an_update_puts_two_items_first_and_a_badge_on_the_icon_but_never_a_notification(self):
+        self.assertFalse([t for t in self.texts() if t.startswith("Update to") or t == "What's new"])
+        plain = self.tray._running_img
+        self.tray.refresh("OpenShaker - running", True, ("Haptics: running",))
+        self.assertIs(self.tray.icon.icon, plain)
+        self.app.update = "1.0.2"
+        self.tray.refresh("OpenShaker - running", True, ("Haptics: running",))
+        texts = self.texts()
+        self.assertEqual(texts[:3], ["Update to 1.0.2", "What's new", "Open OpenShaker"], "the update comes first")
+        self.assertTrue(next(i for i in self.items() if str(i) == "Open OpenShaker").default,
+                        "a left click still opens the window")
+        badged = self.tray.icon.icon
+        self.assertIsNot(badged, plain)
+        self.assertNotEqual(badged.tobytes(), plain.tobytes(), "the badge changes the picture")
+        self.assertEqual(badged.size, plain.size)
+        self.tray.refresh("OpenShaker - NOT running", False, ("Haptics: stopped",))
+        self.assertNotEqual(self.tray.icon.icon.tobytes(), self.tray._stopped_img.tobytes(), "grey icons get it too")
+        self.items()[0](self.tray.icon)
+        self.items()[1](self.tray.icon)
+        self.assertEqual(self.app.calls, ["update_from_tray", "open_whats_new"], "both on the Tk thread")
+        self.assertEqual(self.tray.icon.notified, [], "no pop-up for an update, ever")
+        self.app.update = ""
+        self.tray.refresh("OpenShaker - running", True, ("Haptics: running",))
+        self.assertIs(self.tray.icon.icon, plain, "the badge goes with the update")
 
     def test_the_menu_can_be_rebuilt_on_demand(self):
         builds = self.tray.icon.menu_builds

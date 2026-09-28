@@ -6,7 +6,13 @@ Every control in the OpenShaker window, from top to bottom.
 
 ![The OpenShaker window while Forza Horizon 5 is driving: Haptics on, the Forza Horizon 5 preset, the status line, live telemetry, the output level, Master and device, and the 14 effect rows](../images/window.png)
 
-The window is titled **OpenShaker 1.0.0**. The sections below go through it from top to bottom.
+The window is titled **OpenShaker** and its version, for example **OpenShaker 1.0.1**. The sections below go through it from top to bottom.
+
+## Update bar
+
+![The update bar at the top of the window: "OpenShaker 1.0.2 is available (you have 1.0.1)." with the buttons Update now, What's new and Skip this version (an example)](../images/update_bar.png)
+
+Only when a newer version is available: a yellow bar across the top says "OpenShaker X.Y.Z is available", with **Update now**, **What's new** and **Skip this version**. While an update downloads and installs, the bar says what it is doing, or why it did not work. See [Updating](Start-With-Windows-Updates-and-Uninstalling.md#updating).
 
 ## Haptics on
 
@@ -50,7 +56,7 @@ This frame shows what the app is receiving.
   - Once data arrives: the source, frames per second and, in Demo, the current scene. For example `Forza (UDP)  60 fps`.
   - `(paused)` means the game says you are not driving right now: a menu, a pause or a respawn.
 - **Eight readouts:** RPM (current/max), Gear (`R`, `N` or a number), Speed (km/h), Throttle %, Brake %, and G long, G lat and G vert (in g, with a sign).
-- **Sources line:** every game listener and what it is doing. For example `Forza (UDP): listening on UDP 5555`, `BeamNG (UDP): OutGauge + Motion Sim`, `Assetto Corsa EVO: waiting for Assetto Corsa EVO`, or `Trackmania (Openplanet): waiting for Openplanet Data Sender on 127.0.0.1:28765 (...)`. In Demo mode it just says `Demo: starting`, which is normal.
+- **Sources line:** every game listener and what it is doing, one per line (long lines wrap at the window's width). For example `Forza (UDP): listening on UDP 5555`, `BeamNG (UDP): OutGauge + Motion Sim`, `Assetto Corsa EVO: waiting for Assetto Corsa EVO`, or `Trackmania (Openplanet): waiting for Openplanet Data Sender on 127.0.0.1:28765 (...)`. In Demo mode it just says `Demo: starting`, which is normal.
 
 Data more than 1 second old counts as gone, and every effect fades out. If two games send at the same time, the newest data wins.
 

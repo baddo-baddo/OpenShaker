@@ -109,7 +109,9 @@ $dist = Join-Path $BuildDir "dist"
 Invoke-Checked $py @("-m", "PyInstaller", "--noconfirm", "--clean", "--log-level", "WARN",
     "--distpath", $dist, "--workpath", (Join-Path $BuildDir "work"), (Join-Path $Root "installer\OpenShaker.spec"))
 $app = Join-Path $dist "OpenShaker"
-foreach ($part in "_internal\_tcl_data", "_internal\_tk_data", "_internal\profiles", "_internal\openshaker.ico") {
+# _ssl and OpenSSL: the update check's HTTPS request needs them (openshaker/updater.py)
+foreach ($part in "_internal\_tcl_data", "_internal\_tk_data", "_internal\profiles", "_internal\openshaker.ico",
+                  "_internal\_ssl.pyd", "_internal\libssl-3.dll", "_internal\libcrypto-3.dll") {
     if (-not (Test-Path (Join-Path $app $part))) { throw "The build is missing $part." }
 }
 # The optional local packages (the spec's PRIVATE, see openshaker/outputs.py) must never reach the
@@ -134,4 +136,9 @@ $iscc = Find-ISCC
 $out = Join-Path $Root "dist"
 Invoke-Checked $iscc @("/Q", "/DAppVersion=$version", "/DBuildDir=$app", "/O$out", (Join-Path $Root "installer\OpenShaker.iss"))
 $setup = Join-Path $out "OpenShaker-Setup-$version.exe"
+# the checksum asset the app's Update now verifies against: ASCII, no BOM, "<lowercase hash>  <name>\n"
+# (a release needs both files; openshaker/updater.py offers no update without the .sha256)
+$hash = (Get-FileHash $setup -Algorithm SHA256).Hash.ToLowerInvariant()
+[IO.File]::WriteAllText("$setup.sha256", "$hash  OpenShaker-Setup-$version.exe`n", [Text.Encoding]::ASCII)
 Write-Host ("== Done: {0}  ({1:N1} MB)" -f $setup, ((Get-Item $setup).Length / 1MB))
+Write-Host "   and $setup.sha256  ($hash)"

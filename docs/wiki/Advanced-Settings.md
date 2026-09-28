@@ -20,6 +20,7 @@ The Advanced dialog, the settings kept only in the settings file, where settings
 | Trackmania Data Sender port | 28765 | The TCP port of the Openplanet Data Sender plugin. OpenShaker connects to it. |
 | Forza listen address (0.0.0.0 also takes an Xbox or another PC) | 127.0.0.1 | 127.0.0.1 accepts Forza only from this PC. 0.0.0.0 also accepts it from an Xbox or another PC on your network. See [Playing from an Xbox or another PC](Setting-Up-Your-Games.md#playing-from-an-xbox-or-another-pc). Leaving it empty means 127.0.0.1. |
 | Output channel | Left | Which channel(s) of the output carry the signal: Left, Right or Both. Any other layout set by hand in the settings file shows as "Custom" and is kept. See [Shakers, amplifiers and channels](Shakers-Amplifiers-and-Channels.md). |
+| Check for updates (asks GitHub once a day) | On | Ticked, OpenShaker asks GitHub about 30 s after it starts and then once a day whether a newer version exists. Unticked, it never contacts the internet. See [Updating](Start-With-Windows-Updates-and-Uninstalling.md#updating). |
 
 A few more settings exist only in the settings file. They are listed under [Settings and logs](#the-settings-file).
 
@@ -29,7 +30,7 @@ A few more settings exist only in the settings file. They are listed under [Sett
 - **Settings:** `%APPDATA%\OpenShaker\config.json`. The tray's **Open settings folder** takes you there.
   - Power users can move the folder with the `OPENSHAKER_HOME` environment variable.
 - **Logs:** `%APPDATA%\OpenShaker\logs\`.
-  - OpenShaker writes only one file there, `gui_error.log`, and only when it fails to start or can't reach a stuck copy of itself. There is no running log.
+  - OpenShaker writes two small files there, and no running log: `gui_error.log`, only when it fails to start or can't reach a stuck copy of itself, and `update.log`, the last 50 failed update checks or updates.
   - File paths in that log can contain your Windows user name, so check it before sharing it.
 - The presets' calibration files are part of the installed program and are never changed.
 
@@ -38,7 +39,8 @@ A few more settings exist only in the settings file. They are listed under [Sett
 - your per-game presets (strengths and on/off switches you changed);
 - settings you changed from the defaults (device, Master, channel, ports and so on);
 - the last profile;
-- the Haptics on switch, but only while it is **off**.
+- the Haptics on switch, but only while it is **off**;
+- the update settings, only when you changed them: the check switched off, or a version you skipped.
 
 Calibration levels are never written into it, so updates can improve the presets without your file getting in the way. Keys you add by hand are kept when the app saves.
 

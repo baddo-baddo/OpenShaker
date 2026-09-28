@@ -5,6 +5,9 @@ from __future__ import annotations
 import os
 import unittest
 
+# no test ever reaches the network: the updater refuses every real request while this is set
+os.environ["OPENSHAKER_OFFLINE"] = "1"
+
 
 def _foreground_is_ours() -> bool:
     try:

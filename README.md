@@ -78,6 +78,10 @@ Reports are very welcome - bugs, and just as much "how it feels on my setup":
 feedback / report a bug** in the tray menu. Nothing is sent automatically. If you attach the log from
 `%APPDATA%\OpenShaker\logs`, read it first: file paths in it can contain your Windows user name.
 
+**Privacy:** OpenShaker's only contact with the internet is the daily update check, one request to
+GitHub that carries nothing but the app's name and version; it can be switched off under **Advanced...**.
+Game data never leaves your PC.
+
 ## Documentation
 
 The **[OpenShaker guide](docs/wiki/README.md)** explains every feature in short, single-topic pages,
@@ -129,6 +133,11 @@ For developers: [development notes](docs/DEVELOPMENT.md), [calibration tools](do
 - **Output channel** (Advanced): **Left** is the default and plays on the left channel only, like
   HaptiConnect; the right channel stays silent. For a shaker on one side of an amplifier pick that
   side; for two shakers pick **Both**. On a shaker that mixes both channels, such as a ButtKicker PRO, Both may feel stronger.
+- **Updates:** once a day OpenShaker asks GitHub whether a newer version exists. If one does, the tray
+  icon gets a small **!** and the window a bar with **Update now**, **What's new** and **Skip this
+  version** - no pop-ups. **Update now** downloads the installer from this project's GitHub release,
+  checks it against its published SHA-256, installs it and starts OpenShaker again; nothing is
+  downloaded before you click it. Switch the check off under **Advanced... > Check for updates**.
 - To uninstall: Windows Settings > Apps > Installed apps > OpenShaker. It asks whether to delete your
   settings too.
 

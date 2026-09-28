@@ -2,6 +2,26 @@
 
 All notable changes to OpenShaker are listed here. Versions follow [semantic versioning](https://semver.org/).
 
+## [1.0.1] - 2026-09-28
+
+### Added
+- **Update check with one-click update.** Once a day OpenShaker asks GitHub whether a newer version
+  exists. There are no pop-ups: the tray icon gets a small "!", the tray menu an **Update to X.Y.Z**
+  item and the window a bar with **Update now**, **What's new** and **Skip this version**.
+  - **Update now** downloads the installer from the GitHub release, checks its size and SHA-256,
+    installs it and starts OpenShaker again, without an administrator prompt.
+  - Nothing is downloaded before you click it.
+  - Switch the check off under **Advanced... > Check for updates**
+    ([how updating works](docs/wiki/Start-With-Windows-Updates-and-Uninstalling.md#updating)).
+
+### Changed
+- The window no longer opens about 1,480 px wide: the status and game-source lines wrap at the window's
+  width, and the sources are listed one per line.
+- The installer includes Python's `ssl` module (OpenSSL) for the update check's HTTPS request.
+- Run over an installed copy, the installer's two boxes start from what you have now (Start with
+  Windows, desktop shortcut), and unticking one removes it. If the installer is cancelled or stops after
+  closing OpenShaker, it starts OpenShaker again.
+
 ## [1.0.0] - 2026-09-28
 
 The first public release.
@@ -29,4 +49,5 @@ The first public release.
 - One-screen installer without administrator rights; clean uninstall.
 - **Send feedback / report a bug** in the tray menu, and issue forms for bugs, feel reports and ideas.
 
+[1.0.1]: https://github.com/baddo-baddo/OpenShaker/releases/tag/v1.0.1
 [1.0.0]: https://github.com/baddo-baddo/OpenShaker/releases/tag/v1.0.0
