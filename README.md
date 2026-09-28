@@ -31,8 +31,8 @@ extra, just their own telemetry setting; Trackmania needs Openplanet (free,
    **Keep** > **Show more** > **Keep anyway**).
 2. Double-click it. The installer is not code-signed, so Windows may show **"Windows protected your
    PC"**: click **More info**, then **Run anyway**.
-3. Click **Install**. That is the only screen: it needs no administrator rights, and **Start with
-   Windows** and a desktop shortcut are both ticked - untick either if you prefer.
+3. Click **Next**. That is the only screen, and it installs straight away: it needs no administrator
+   rights, and **Start with Windows** and a desktop shortcut are both ticked - untick either if you prefer.
 
 OpenShaker starts by itself when setup finishes and opens its window. Closing the window keeps it
 running in the notification area, next to the clock. If you don't see its icon, click the **^** arrow

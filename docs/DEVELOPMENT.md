@@ -497,9 +497,9 @@ that every name in `OPTIONAL_PACKAGES` is in both guards.
    version comes only from `openshaker/__init__.py`; the .iss refuses to compile without it.
 
 The installer is per-user (`PrivilegesRequired=lowest`, `{autopf}` = `%LOCALAPPDATA%\Programs`) and
-has one screen: the Tasks page - Start with Windows and a desktop shortcut, both ticked - with an Install
-button (no Welcome, folder, group, Ready or Finished page; without the Ready page Inno labels the Tasks
-page's button Install). It adds a Start-menu shortcut, installs LICENSE (as LICENSE.txt) and
+has one screen: the Tasks page - Start with Windows and a desktop shortcut, both ticked - whose Next
+button installs straight away (no Welcome, folder, group, Ready or Finished page; the button keeps Inno's
+"Next" label - a `[Messages] ButtonNext=&Install` override would rename it). It adds a Start-menu shortcut, installs LICENSE (as LICENSE.txt) and
 THIRD-PARTY-NOTICES.txt next to the exe - one copy of each - then starts the app and closes. A silent
 `/SILENT` or `/VERYSILENT` update puts back the app it stopped (only when the `OpenShakerRunning`
 mutex was held before it quit that copy): in the tray (`--hidden`), or with its window when setup ran
