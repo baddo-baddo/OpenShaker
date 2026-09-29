@@ -136,8 +136,9 @@ $iscc = Find-ISCC
 $out = Join-Path $Root "dist"
 Invoke-Checked $iscc @("/Q", "/DAppVersion=$version", "/DBuildDir=$app", "/O$out", (Join-Path $Root "installer\OpenShaker.iss"))
 $setup = Join-Path $out "OpenShaker-Setup-$version.exe"
-# the checksum asset the app's Update now verifies against: ASCII, no BOM, "<lowercase hash>  <name>\n"
-# (a release needs both files; openshaker/updater.py offers no update without the .sha256)
+# a checksum for checking by hand (not uploaded): ASCII, no BOM, "<lowercase hash>  <name>\n". From 1.0.2 the
+# updater verifies the SHA-256 GitHub itself lists for the release asset; a 1.0.1 copy is offered a release
+# only if the latest release carries this file.
 $hash = (Get-FileHash $setup -Algorithm SHA256).Hash.ToLowerInvariant()
 [IO.File]::WriteAllText("$setup.sha256", "$hash  OpenShaker-Setup-$version.exe`n", [Text.Encoding]::ASCII)
 Write-Host ("== Done: {0}  ({1:N1} MB)" -f $setup, ((Get-Item $setup).Length / 1MB))

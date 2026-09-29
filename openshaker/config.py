@@ -15,7 +15,8 @@ DEFAULTS = {
                 "skip": "",          # "Skip this version": hidden until a newer one appears
                 "auto": False,       # Advanced > Install updates automatically: off unless the user says yes
                 "auto_asked": False,  # the update bar's one-time question was answered (or Update now / Skip)
-                "auto_done": ""},    # the version an automatic update is installing: the new one says so once
+                "auto_done": "",     # the version an automatic update is installing: the new one says so once
+                "auto_failed": ""},  # an automatic update to this version failed: only Update now tries it again
     "presets": {},                   # per-profile user strengths: {key: {"effects": {name: {trim, enabled}}}}
     "profile": None,                 # fallback profile.json (optional); per-game profiles below take precedence
     "profiles": {                    # profile to use for each detected game (auto-switching)
@@ -330,6 +331,9 @@ def _sanitize_user(user: dict | None) -> dict:
             upd.pop(key)              # not true/false: automatic updates stay off, the question stays unasked
     if not isinstance(upd.get("auto_done", ""), str):
         upd.pop("auto_done")
+    failed = upd.get("auto_failed", "")
+    if not isinstance(failed, str) or (failed and not re.fullmatch(r"\d+\.\d+\.\d+", failed)):
+        upd.pop("auto_failed")        # not an X.Y.Z version: nothing is held back
     for name, params in ((u.get("effects") or {})).items():
         if not isinstance(params, dict):
             continue

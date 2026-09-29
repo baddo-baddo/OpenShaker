@@ -2,6 +2,30 @@
 
 All notable changes to OpenShaker are listed here. Versions follow [semantic versioning](https://semver.org/).
 
+## [1.0.3] - 2026-09-28
+
+### Fixed
+- **A failed automatic update is not tried again and again.**
+  - If the installer brought the old version back, or the download or install failed, that version is no
+    longer installed automatically, not even after a restart. The bar says so, and **Update now** still
+    works. A newer version is tried automatically again.
+  - A network problem only postpones the automatic update by 10 minutes.
+- **Switching automatic updates or the update check off during an automatic download** now stops it
+  before anything is installed.
+- **Automatic updates wait while OpenShaker's window is open** (or a test tone plays), so they never close
+  it under you.
+- They also wait when OpenShaker runs with `--no-start` or without its tray icon.
+- **After "No" to the Update now question**, an automatic update keeps waiting for a quiet moment
+  instead of until the next day.
+- **The start after an automatic update shows no "device not found" notification.**
+
+### Changed
+- When a game starts (or you open the window) during an automatic update's download, the checked
+  download is kept and installed at the next quiet moment, instead of being downloaded again.
+- A wider or taller window now spreads the telemetry readouts, sliders and level bars instead of leaving
+  empty space. The default size is unchanged.
+- The privacy notes and the guide describe the update check more exactly: at every start, then daily.
+
 ## [1.0.2] - 2026-09-28
 
 ### Added
@@ -10,7 +34,7 @@ All notable changes to OpenShaker are listed here. Versions follow [semantic ver
     when no game is running?" **Yes** switches them on and **No** leaves them off. **Update now** or
     **Skip this version** count as an answer too.
   - Change it any time under **Advanced... > Install updates automatically**.
-  - When they are on, OpenShaker waits until no game has run or sent data for 5 minutes. It then
+  - When they are on, OpenShaker waits until there is no supported game running on this PC and no game data for 5 minutes. It then
     downloads, checks and installs the update exactly as **Update now** does, and comes back in the
     tray; the window says it updated itself.
   - A skipped version is never installed automatically, and a failed automatic update falls back to the
@@ -20,7 +44,8 @@ All notable changes to OpenShaker are listed here. Versions follow [semantic ver
 - The installer's only button now reads **Install** instead of **Next**.
 - **Update now** checks the installer against the SHA-256 that GitHub itself publishes for each release
   file, instead of a separate `.sha256` file. If GitHub lists none, nothing is downloaded and the bar
-  points to the release page.
+  points to the release page. From 1.0.0 or 1.0.1, install 1.0.2 once by hand: their updaters don't
+  offer it.
 
 ## [1.0.1] - 2026-09-28
 
@@ -69,6 +94,7 @@ The first public release.
 - One-screen installer without administrator rights; clean uninstall.
 - **Send feedback / report a bug** in the tray menu, and issue forms for bugs, feel reports and ideas.
 
+[1.0.3]: https://github.com/baddo-baddo/OpenShaker/releases/tag/v1.0.3
 [1.0.2]: https://github.com/baddo-baddo/OpenShaker/releases/tag/v1.0.2
 [1.0.1]: https://github.com/baddo-baddo/OpenShaker/releases/tag/v1.0.1
 [1.0.0]: https://github.com/baddo-baddo/OpenShaker/releases/tag/v1.0.0

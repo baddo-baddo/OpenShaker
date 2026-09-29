@@ -270,6 +270,7 @@ class App:
         self._auto_job = None                    # a waiting automatic update's next look (_auto_tick)
         self._auto_update = False                # the update under way was started automatically
         self._auto_failed = ""                   # an automatic update to this version failed: the bar takes over
+        self._auto_kept = None                   # (version, sha256, Verified) an interrupted automatic update keeps
         self._notes_version = ""                 # "updated itself to X": What's new opens X's release page
         self._tele_seen_at = time.monotonic()    # the last telemetry from any game (the launch counts as one)
         self._update_busy = False
@@ -392,6 +393,8 @@ class App:
         self.sources_label = ttk.Label(tele, textvariable=self.sources_var, foreground="#555", wraplength=WRAP_MIN,
                                        justify="left")
         self.sources_label.grid(row=3, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        for c in range(4):                        # a wider window spreads the readouts instead of leaving a gap
+            tele.columnconfigure(c, weight=1)
         # long status and source lines wrap at the window's width instead of widening the window
         outer.bind("<Configure>", self._rewrap, add="+")
 
@@ -451,13 +454,15 @@ class App:
             box.frame.grid(row=row, column=2, sticky="w")
             self.strength_boxes[name] = box
             bar = ttk.Progressbar(eff, length=90, maximum=1.0)
-            bar.grid(row=row, column=3, sticky="w", padx=(8, 0))
+            bar.grid(row=row, column=3, sticky="we", padx=(8, 0))
+            eff.rowconfigure(row, weight=1)       # a taller window spaces the rows out, not a gap below them
             self.effect_bars[name] = bar
         self.hint_label = ttk.Label(eff, foreground="#555", wraplength=520,
                                     text="Click a slider to jump there, or click a number to type one "
                                          "(Enter or clicking elsewhere applies it, Esc cancels).")
         self.hint_label.grid(row=len(REGISTRY), column=0, columnspan=4, sticky="w", pady=(6, 0))
-        eff.columnconfigure(1, weight=1)
+        eff.columnconfigure(1, weight=3)          # a wider window: mostly longer sliders, a little longer bars
+        eff.columnconfigure(3, weight=1)
 
         # -- bottom buttons -----------------------------------------------------------------------
         bottom = ttk.Frame(outer)
@@ -726,7 +731,14 @@ class App:
             return
         self.update_release, self._update_sticky = release, False
         self._update_version, self._update_state = release.version, ""
-        self._show_update(f"{APP_NAME} {release.version} is available (you have {__version__}).", ask=True)
+        if self._auto_kept is not None and self._auto_kept[0] != release.version:
+            self._drop_kept()                     # another version is on offer now
+        failed = (self.cfg.get("updates") or {}).get("auto_failed") or ""
+        if failed and updater.is_newer(release.version, failed):
+            self._set_auto_failed("")             # a newer version: automatic updates may try it
+        held = (" Its automatic update did not work, so it waits for Update now."
+                if self.updates_auto() and self._auto_blocked(release.version) else "")
+        self._show_update(f"{APP_NAME} {release.version} is available (you have {__version__}).{held}", ask=True)
         self._arm_auto()
 
     def _installer_came_back(self, how: str, version: str) -> None:
@@ -735,6 +747,7 @@ class App:
         it stopped partway through the files, which may now be a mix of two versions."""
         self._update_version, self._update_state = version, "failed"    # "Update to X failed - open ..."
         target = version or "the new version"
+        automatic = bool((self.cfg.get("updates") or {}).get("auto_done"))   # read before _after_automatic_update
         if how == "incomplete":
             updater.log(f"update to {version or '?'} stopped partway through its files; setup started "
                         f"{__version__} again")
@@ -744,8 +757,10 @@ class App:
                               f"(What's new).", buttons=("news",))
         else:
             updater.log(f"update to {version or '?'} failed; setup started {__version__} again")
+            again = ("It will not be installed automatically again; Update now tries again." if automatic
+                     else "It will be offered again.")
             self._show_update(f"The update to {target} did not install, so {APP_NAME} {__version__} was "
-                              f"started again. It will be offered again.", buttons=False)
+                              f"started again. {again}", buttons=False)
 
     def _show_update(self, text: str, buttons: bool | tuple = True, ask: bool = False) -> None:
         """buttons: True = all three while a release is offered, False = none, a tuple = just those.
@@ -764,6 +779,7 @@ class App:
         self._refresh_tray(force=True)            # the badge and the menu items
 
     def _hide_update(self) -> None:
+        self._drop_kept()
         self.update_release, self._update_version, self._update_state = None, "", ""
         self._update_sticky, self._notes_version = False, ""
         self._cancel_auto()
@@ -824,6 +840,7 @@ class App:
             if not messagebox.askyesno(f"Update {APP_NAME}", UPDATE_CONFIRM, parent=self.root) \
                     or self.update_release is not release:
                 self._update_busy = False
+                self._arm_auto()                  # a tick may have come and gone while the question was open
                 return
         self._cancel_auto()
         self._auto_update = auto
@@ -834,19 +851,24 @@ class App:
         self._update_state = "busy"
         self._show_update(f"Downloading {APP_NAME} {release.version}{' to install it automatically' if auto else ''} ...",
                           buttons=False)
-        threading.Thread(target=self._update_download_worker, args=(release, from_window), name="update",
-                         daemon=True).start()
+        threading.Thread(target=self._update_download_worker, args=(release, from_window, self._auto_kept),
+                         name="update", daemon=True).start()
 
-    def _update_download_worker(self, release, show_window: bool) -> None:
+    def _update_download_worker(self, release, show_window: bool, kept=None) -> None:
         try:
             fresh = updater.check()               # still offered, and still the version clicked?
             if fresh is None or fresh.version != release.version or self._skipped(fresh.version):
                 self.run_on_ui(lambda: self._update_withdrawn(release, fresh))
                 return
-            verified = updater.download(fresh)
+            if (kept is not None and fresh.sha256 and kept[:2] == (fresh.version, fresh.sha256)
+                    and kept[2].size == fresh.installer.size and Path(kept[2].path).is_file()):
+                verified = kept[2]                # checked before, still the same file on GitHub; the
+            else:                                 # installer re-hashes it right before it runs anyway
+                verified = updater.download(fresh)
         except Exception as exc:
             error = str(exc)                      # `exc` is gone once the except block ends
-            self.run_on_ui(lambda: self._update_failed(error))
+            transient = isinstance(exc, updater.NetworkError)
+            self.run_on_ui(lambda: self._update_failed(error, transient))
             return
         self.run_on_ui(lambda: self._install_update(fresh, verified, show_window))
 
@@ -861,14 +883,27 @@ class App:
     def _install_update(self, release, verified, show_window: bool) -> None:
         self.update_release, self._update_version = release, release.version
         if self._auto_update:
-            if not self._game_idle():             # a game started during the download: wait again
-                updater.discard(verified.path)
+            consent = self._auto_may_run() and not self._skipped(release.version)
+            if not (consent and self._game_idle() and self._user_away()):
+                # switched off or skipped: throw the download away. A game started or the window opened
+                # during the download: keep it for the next quiet moment (no second download).
+                if consent:
+                    self._keep_download(release, verified)
+                else:
+                    self._drop_kept()
+                    updater.discard(verified.path)
                 self._update_busy, self._auto_update = False, False
-                self._offer_update(release)
+                if self.updates_enabled():
+                    self._offer_update(release)   # waits again if automatic updates are still on
+                else:
+                    self._hide_update()
                 return
             updater.log(f"installing {release.version} automatically (no game running)")
             self.cfg.setdefault("updates", {})["auto_done"] = release.version   # the new version says so once
             self._save_now()
+        if self._auto_kept is not None and self._auto_kept[2] is not verified:
+            self._drop_kept()                     # superseded by this download
+        self._auto_kept = None                    # the installer uses this file now
         try:
             process = updater.run_installer(verified, show_window)
         except Exception as exc:
@@ -898,16 +933,23 @@ class App:
         else:
             self.root.after(2000, self._watch_installer)
 
-    def _update_failed(self, error: str) -> None:
+    def _update_failed(self, error: str, transient: bool = False) -> None:
+        """transient: the network failed (NetworkError), not the update itself."""
         self._update_busy, self._update_state = False, "failed"
         release = self.update_release
         auto, self._auto_update = self._auto_update, False
-        if auto:
-            self._auto_failed = release.version if release else ""    # the bar takes over for this version
         upd = self.cfg.get("updates") or {}
         if upd.get("auto_done"):
             upd.pop("auto_done")
             self._save_now()
+        if auto and transient and release is not None:
+            updater.log(f"automatic update to {release.version} postponed: {error}")
+            self._offer_update(release)           # the plain offer again, and a later try
+            self._cancel_auto()
+            self._arm_auto(updater.RETRY_AFTER_S[0])
+            return
+        if auto and release is not None:
+            self._set_auto_failed(release.version)    # the bar takes over for this version, also after a restart
         updater.log(f"{'automatic ' if auto else ''}update to {release.version if release else '?'} failed: {error}")
         self._show_update(f"{'Automatic update' if auto else 'Update'} to "
                           f"{release.version if release else 'the new version'} failed: {error}. "
@@ -943,6 +985,48 @@ class App:
             self._save_now()
         self.update_ask.pack_forget()
 
+    def _keep_download(self, release, verified) -> None:
+        if self._auto_kept is not None and self._auto_kept[2] is not verified:
+            self._drop_kept()
+        self._auto_kept = (release.version, release.sha256, verified)
+
+    def _drop_kept(self) -> None:
+        if self._auto_kept is not None:
+            updater.discard(self._auto_kept[2].path)
+            self._auto_kept = None
+
+    def _auto_may_run(self) -> bool:
+        """Automatic updates may act: switched on, an installed copy, and not a launch with --no-start or
+        without a tray icon (setup's relaunch would drop those flags)."""
+        return (self.updates_auto() and updater.is_installed_copy() and not self._no_start
+                and self.tray is not None and self.tray.active)
+
+    def _user_away(self) -> bool:
+        """Nobody is using OpenShaker itself: its window and any dialog of it are closed, and no test tone
+        plays. An automatic update waits for that, so it never closes something the user is looking at."""
+        if self.window_visible():
+            return False
+        try:
+            if any(isinstance(w, tk.Toplevel) and w.winfo_viewable() for w in self.root.winfo_children()):
+                return False
+        except tk.TclError:
+            return False
+        tone = self._tone_thread
+        return not (tone is not None and tone.is_alive())
+
+    def _auto_blocked(self, version: str) -> bool:
+        """An automatic update to `version` failed: in this session, or recorded in updates.auto_failed."""
+        return bool(version) and version in (self._auto_failed, (self.cfg.get("updates") or {}).get("auto_failed") or "")
+
+    def _set_auto_failed(self, version: str, save=None) -> None:
+        self._auto_failed = version
+        upd = self.cfg.setdefault("updates", {})
+        if version:
+            upd["auto_failed"] = version
+        else:
+            upd.pop("auto_failed", None)
+        (save or self._save_now)()
+
     def _game_idle(self) -> bool:
         """Safe to install by itself: no game has sent data for AUTO_IDLE_S (the data Update now's question
         looks at), and no supported game runs on this PC."""
@@ -956,8 +1040,8 @@ class App:
     def _arm_auto(self, delay_s: float = AUTO_TICK_S) -> None:
         """An update is on offer and automatic updates are on: look for a quiet moment (_auto_tick)."""
         release = self.update_release
-        if (self._auto_job is not None or release is None or self._update_busy or not self.updates_auto()
-                or self._auto_failed == release.version or not updater.is_installed_copy()):
+        if (self._auto_job is not None or release is None or self._update_busy or not self._auto_may_run()
+                or self._auto_blocked(release.version)):
             return
         self._auto_job = self.root.after(int(delay_s * 1000), self._auto_tick)
 
@@ -972,27 +1056,37 @@ class App:
     def _auto_tick(self) -> None:
         self._auto_job = None
         release = self.update_release
-        if (release is None or self._update_busy or not self.updates_auto() or self._skipped(release.version)
-                or self._auto_failed == release.version):
+        if (release is None or self._update_busy or not self._auto_may_run() or self._skipped(release.version)
+                or self._auto_blocked(release.version)):
             return
-        if not self._game_idle():
-            self._arm_auto()                      # a game, or its data lately: look again later
+        if not (self._game_idle() and self._user_away()):
+            self._arm_auto()                      # a game, its data lately, or the window open: look again later
             return
         self.update_now(auto=True)
 
     def _after_automatic_update(self, came_back: bool) -> None:
-        """At start: an automatic update installed this version (updates.auto_done), so the bar says so
-        until an update is offered; any other value (the update did not happen) is just cleared."""
+        """At start. updates.auto_done names the version an automatic update was installing:
+        - this version: it worked, so the bar says so until an update is offered or OpenShaker restarts;
+        - setup came back (--update-failed / --update-incomplete), or a newer version than this one: it
+          did not, so updates.auto_failed holds it back from automatic updates (Update now still works).
+        A recorded failure this version has reached (installed by hand) is cleared."""
         upd = self.cfg.get("updates") or {}
+        failed = upd.get("auto_failed") or ""
+        if failed and not updater.is_newer(failed, __version__):
+            self._set_auto_failed("", self._save_quietly)
         done = upd.get("auto_done")
         if not done:
             return
         upd.pop("auto_done")
         self._save_quietly()
+        self._device_warned = True                # an update nobody watched: no "device not found" toast now
         if done == __version__ and not came_back:
             updater.log(f"now running {__version__}, installed automatically")
             self._notes_version, self._update_sticky = done, True
             self._show_update(f"{APP_NAME} updated itself to {__version__}.", buttons=("news",))
+        elif came_back or updater.is_newer(done, __version__):
+            updater.log(f"automatic update to {done} did not complete; not tried again automatically")
+            self._set_auto_failed(done, self._save_quietly)
 
     # -- output device ----------------------------------------------------------------------
     def _device_label(self, name: str) -> str:
@@ -1214,6 +1308,7 @@ class App:
             self._arm_auto()
         else:
             self._cancel_auto()
+            self._drop_kept()
         if not self.updates_enabled():
             self._schedule_update_check(0)            # off: cancels the next check; nothing asks GitHub
             if self.update_release is not None and not self._update_busy:
@@ -1425,6 +1520,7 @@ class App:
             self._wrap_width = width
             for label in (self.status_label, self.sources_label):
                 label.configure(wraplength=width)
+            self.hint_label.configure(wraplength=width - 24)      # inside the Effects frame's border and padding
 
     # -- tray-facing API -----------------------------------------------------------------------
     def run_on_ui(self, fn) -> None:

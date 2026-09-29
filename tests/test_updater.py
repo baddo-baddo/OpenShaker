@@ -464,6 +464,8 @@ class WindowTests(unittest.TestCase):
 
     def fake_download(self, release):
         self.downloads.append(release.version)
+        if isinstance(self.download_error, Exception):
+            raise self.download_error
         if self.download_error:
             raise updater.UpdateError(self.download_error)
         return updater.Verified(self.dir / NAME, len(PAYLOAD), SHA)
@@ -480,13 +482,14 @@ class WindowTests(unittest.TestCase):
             self.during_question()
         return self.yes
 
-    def app(self, check=True, **kw):
+    def app(self, check=True, no_start=False, **kw):
         if not check:
             self.path.write_text(json.dumps({"updates": {"check": False}}), encoding="utf-8")
         root = tk_root()
         self.addCleanup(close_window, root)
         app = gui.App(root, config.load(self.path), str(self.path), start_haptics=False, use_tray=True,
                       ask_startup=False, **kw)
+        app._no_start = no_start          # a normal launch unless asked (these tests just never start haptics)
         self.assertTrue(app.tray.active)
         return app
 
@@ -781,7 +784,14 @@ class WindowTests(unittest.TestCase):
             with self.subTest(name):
                 self.path.write_text(json.dumps(saved), encoding="utf-8")
                 upd = config.load(str(self.path))["updates"]
-                self.assertEqual((upd["auto"], upd["auto_asked"], upd["auto_done"]), (False, False, ""))
+                self.assertEqual((upd["auto"], upd["auto_asked"], upd["auto_done"], upd["auto_failed"]),
+                                 (False, False, "", ""))
+        for bad in (5, "latest", "1.0", "v1.0.4", ["1.0.4"]):
+            with self.subTest(auto_failed=bad):
+                self.path.write_text(json.dumps({"updates": {"auto_failed": bad}}), encoding="utf-8")
+                self.assertEqual(config.load(str(self.path))["updates"]["auto_failed"], "", "nothing held back")
+        self.path.write_text(json.dumps({"updates": {"auto_failed": "1.0.4"}}), encoding="utf-8")
+        self.assertEqual(config.load(str(self.path))["updates"]["auto_failed"], "1.0.4")
         app = self.app()
         self.checked(app)
         self.assertFalse(app.updates_auto())
@@ -877,6 +887,53 @@ class WindowTests(unittest.TestCase):
         self.assertIsNotNone(app._auto_job, "waits for the next quiet moment")
         self.assertNotIn("auto_done", self.saved())
 
+    def test_an_interrupted_automatic_update_keeps_its_download(self):
+        (self.dir / NAME).write_bytes(PAYLOAD)            # the checked installer the fake download returns
+        app = self.auto_app()
+        self.checked(app)
+        self.quiet_tick(app)
+        self.games = {"trackmania.exe"}                   # a game starts during the download
+        self.wait_for(app, "update")
+        self.assertEqual(app._auto_kept[:2], ("1.0.2", SHA), "kept, not thrown away")
+        self.games = set()
+        self.quiet_tick(app)                              # the next quiet moment
+        self.wait_for(app, "update")
+        self.assertEqual(self.downloads, ["1.0.2"], "no second download")
+        self.assertEqual(self.installs, [(self.dir / NAME, False)])
+        self.assertEqual(len(self.asked), 3, "GitHub was still asked first each time")
+        self.assertIsNone(app._auto_kept)
+
+    def test_a_kept_download_is_not_used_once_github_lists_something_else(self):
+        (self.dir / NAME).write_bytes(PAYLOAD)
+        for name, change in (("another hash", lambda: with_assets(
+                                  lambda a: dict(a, digest="sha256:" + "0" * 64) if a["name"] == NAME else a)),
+                             ("another version", lambda: api_answer("v1.0.9"))):
+            with self.subTest(name):
+                self.downloads.clear()
+                app = self.auto_app()
+                self.answer = updater.release_from(api_answer(), current="1.0.1")
+                self.checked(app)
+                self.quiet_tick(app)
+                self.games = {"trackmania.exe"}
+                self.wait_for(app, "update")
+                self.games = set()
+                self.answer = updater.release_from(change(), current="1.0.1")
+                self.checked(app)
+                self.quiet_tick(app)
+                self.wait_for(app, "update")
+                self.assertEqual(len(self.downloads), 2, "downloaded again")
+
+    def test_switching_automatic_updates_off_drops_a_kept_download(self):
+        (self.dir / NAME).write_bytes(PAYLOAD)
+        app = self.auto_app()
+        self.checked(app)
+        self.quiet_tick(app)
+        self.games = {"trackmania.exe"}
+        self.wait_for(app, "update")
+        self.assertIsNotNone(app._auto_kept)
+        app._apply_advanced([((app.cfg["updates"], "auto"), False)])
+        self.assertIsNone(app._auto_kept)
+
     def test_an_automatic_update_that_fails_leaves_it_to_the_bar(self):
         for field, text in (("download_error", "the download does not match its SHA-256"),
                             ("install_error", "the downloaded installer changed after it was checked")):
@@ -933,13 +990,154 @@ class WindowTests(unittest.TestCase):
         self.checked(app)
         self.assertIn("updated itself", app.update_var.get(), "a check with nothing newer keeps it")
         self.assertEqual(self.app().update_bar.winfo_manager(), "", "the next start says nothing")
-        for name, done, kw in (("another version", "9.9.9", {}),
-                               ("the installer came back", gui.__version__, {"update_result": ("failed", "9.9.9")})):
-            with self.subTest(name):
-                app = self.auto_app(auto_done=done)
-                app = self.app(**kw) if kw else app
+        app = self.auto_app(auto_done="1.0.0")            # an older version: it was installed some other way
+        self.assertNotIn("updated itself", app.update_var.get())
+        self.assertNotIn("auto_done", self.saved())
+        self.assertNotIn("auto_failed", self.saved())
+
+    # -- 1.0.3: a failed automatic update is remembered (review S1, S2, N2, N8) -------------------
+    def offer(self, version="9.9.9"):
+        self.answer = updater.release_from(api_answer(f"v{version}"), current="1.0.1")
+
+    def test_an_automatic_update_setup_brought_back_is_not_tried_again_automatically(self):
+        for how in ("failed", "incomplete"):
+            with self.subTest(how):
+                self.path.write_text(json.dumps({"updates": {"auto": True, "auto_asked": True, "auto_done": "9.9.9"}}),
+                                     encoding="utf-8")
+                app = self.app(update_result=(how, "9.9.9"))     # ONE start, as setup's relaunch makes it
                 self.assertNotIn("updated itself", app.update_var.get())
+                if how == "failed":
+                    self.assertIn("will not be installed automatically again", app.update_var.get())
+                self.assertEqual(self.saved().get("auto_failed"), "9.9.9")
                 self.assertNotIn("auto_done", self.saved())
+                self.offer()
+                self.checked(app)
+                self.assertIsNone(app._auto_job, "not armed again")
+                self.assertIn("waits for Update now", app.update_var.get())
+                self.quiet_tick(app)
+                self.assertEqual(self.downloads, [], "and a quiet moment installs nothing")
+
+    def test_a_failed_automatic_update_is_not_retried_after_a_restart(self):
+        self.download_error = "the downloaded installer is gone"      # an antivirus took it, say
+        app = self.auto_app()
+        self.offer()
+        self.checked(app)
+        self.quiet_tick(app)
+        self.wait_for(app, "update")
+        self.assertEqual(self.saved().get("auto_failed"), "9.9.9")
+        self.download_error = None
+        app = self.app()                                  # the next start (Windows, or the user)
+        self.checked(app)
+        self.assertIsNone(app._auto_job)
+        self.quiet_tick(app)
+        self.assertEqual(self.downloads, ["9.9.9"], "downloaded once, in the first session only")
+        self.offer("9.9.10")                              # a newer version gets a fresh chance
+        self.checked(app)
+        self.assertIsNotNone(app._auto_job)
+        self.assertNotIn("auto_failed", self.saved())
+
+    def test_update_now_still_installs_a_held_back_version(self):
+        app = self.auto_app(auto_failed="9.9.9")
+        self.offer()
+        self.checked(app)
+        self.assertIsNone(app._auto_job)
+        app.update_now()
+        self.wait_for(app, "update")
+        self.assertEqual(len(self.installs), 1)
+        self.assertEqual(self.saved().get("auto_failed"), "9.9.9",
+                         "kept until that version runs, so a manual attempt that fails cannot start a loop")
+
+    def test_a_version_reached_some_other_way_clears_the_failure(self):
+        for held in (gui.__version__, "1.0.0"):
+            with self.subTest(held):
+                self.auto_app(auto_failed=held)
+                self.assertNotIn("auto_failed", self.saved())
+
+    def test_a_network_error_during_an_automatic_update_only_postpones_it(self):
+        self.download_error = updater.NetworkError("URLError: getaddrinfo failed")   # just after a wake from sleep
+        app = self.auto_app()
+        self.offer()
+        self.checked(app)
+        delays, arm = [], app._arm_auto
+        app._arm_auto = lambda delay_s=gui.AUTO_TICK_S: (delays.append(delay_s), arm(delay_s))
+        self.quiet_tick(app)
+        self.wait_for(app, "update")
+        self.assertNotIn("auto_failed", self.saved())
+        self.assertIn("9.9.9 is available", app.update_var.get())
+        self.assertEqual(app.update_status(), "")
+        self.assertIsNotNone(app._auto_job)
+        self.assertEqual(delays[-1], updater.RETRY_AFTER_S[0], "tried again later, not every 30 s")
+        self.assertIn("postponed", (self.dir / "logs" / updater.LOG_NAME).read_text(encoding="utf-8"))
+
+    # -- 1.0.3: consent and the user's presence (review N1, N3, N4, N5, N6) -------------------------
+    def test_switching_off_during_the_download_installs_nothing(self):
+        for key in ("auto", "check"):
+            with self.subTest(key):
+                app = self.auto_app()
+                self.offer()
+                self.checked(app)
+                self.quiet_tick(app)                      # the download starts
+                app._apply_advanced([((app.cfg["updates"], key), False)])      # ... and the user says no
+                self.wait_for(app, "update")
+                self.assertEqual(self.installs, [])
+                self.assertNotIn("auto_done", self.saved())
+                self.assertIsNone(app._auto_job)
+                if key == "auto":
+                    self.assertIn("9.9.9 is available", app.update_var.get(), "Update now is still there")
+                else:
+                    self.assertEqual(app.update_bar.winfo_manager(), "", "no check: no bar")
+
+    def test_an_automatic_update_waits_while_openshaker_is_in_use(self):
+        app = self.auto_app()
+        self.offer()
+        self.checked(app)
+        for name, busy, idle in (("window open", lambda: setattr(app, "window_visible", lambda: True),
+                                  lambda: setattr(app, "window_visible", lambda: False)),
+                                 ("test tone", lambda: setattr(app, "_tone_thread", type("T", (), {"is_alive": lambda s: True})()),
+                                  lambda: setattr(app, "_tone_thread", None))):
+            with self.subTest(name):
+                busy()
+                self.quiet_tick(app)
+                self.assertEqual(self.downloads, [])
+                self.assertIsNotNone(app._auto_job, "it looks again later")
+                idle()
+        self.quiet_tick(app)
+        self.wait_for(app, "update")
+        self.assertEqual(len(self.installs), 1, "once nobody is at OpenShaker")
+
+    def test_no_to_the_update_now_question_keeps_the_automatic_update_waiting(self):
+        app = self.auto_app()
+        self.offer()
+        self.checked(app)
+        self.game_running(app)
+        self.during_question = app._auto_tick             # the 30 s tick fires while the question is open
+        self.yes = False
+        app.update_now()
+        self.assertIsNotNone(app._auto_job, "still waiting for a quiet moment")
+
+    def test_no_automatic_updates_after_no_start_or_without_a_tray_icon(self):
+        for name, setup in (("--no-start", lambda a: setattr(a, "_no_start", True)),
+                            ("no tray", lambda a: setattr(a.tray, "active", False))):
+            with self.subTest(name):
+                app = self.auto_app()
+                setup(app)                                # setup's relaunch would drop that flag
+                self.offer()
+                self.checked(app)
+                self.assertIsNone(app._auto_job)
+                self.quiet_tick(app)
+                self.assertEqual(self.downloads, [])
+
+    def test_the_start_after_an_automatic_update_shows_no_toast(self):
+        plain = self.app()
+        plain._notify_device_missing()                    # what a launch with the shaker off does
+        self.assertEqual(len(plain.tray.icon.notified), 1)
+        for done, kw in ((gui.__version__, {}), ("9.9.9", {"update_result": ("failed", "9.9.9")})):
+            with self.subTest(done):
+                self.path.write_text(json.dumps({"updates": {"auto": True, "auto_asked": True, "auto_done": done}}),
+                                     encoding="utf-8")
+                app = self.app(**kw)
+                app._notify_device_missing()
+                self.assertEqual(app.tray.icon.notified, [], "nobody started it: no toast")
 
     def test_test_mode_is_visible(self):
         env(self, OPENSHAKER_UPDATE_TEST="1")

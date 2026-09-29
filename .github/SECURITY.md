@@ -28,7 +28,8 @@ To help you judge a report's impact:
   account and nothing about you or your PC beyond the request itself. **Advanced... > Check for updates** turns it
   off completely. **Send feedback** only opens the GitHub issue page in your browser.
 - Nothing is downloaded until you click **Update now**, or, only if you switched on **Install updates
-  automatically** (from 1.0.2; off unless you say yes), until no game has run or sent data for 5 minutes.
+  automatically** (from 1.0.2; off unless you say yes), until there is no supported game running on this PC and no game data for 5 minutes
+  (from 1.0.3 also: OpenShaker's window closed).
   Then it downloads only `OpenShaker-Setup-X.Y.Z.exe` from that release on GitHub (HTTPS, GitHub hosts
   only, checked on every redirect), checks its size and its SHA-256 against the ones GitHub lists for that
   file in the release, and deletes it without running it if either check fails; without a SHA-256 from

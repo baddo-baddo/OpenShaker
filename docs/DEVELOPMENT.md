@@ -389,20 +389,39 @@ that every name in `OPTIONAL_PACKAGES` is in both guards.
     `answer_auto_update(yes)` sets `auto` and `auto_asked`. Update now (`_mark_auto_asked`), Skip and
     changing the Advanced switch (`_apply_advanced`) set `auto_asked` too. No dialog, no notify().
   - **Waiting:** `_offer_update` calls `_arm_auto()`, which schedules `_auto_tick` every `AUTO_TICK_S`
-    (30 s) while auto is on, the version is not skipped and no automatic attempt at it failed.
-    `_game_idle()` needs `_game_sending()` false, no telemetry for `AUTO_IDLE_S` (300 s;
-    `_tele_seen_at` is set by `_refresh` whenever the status has telemetry, and starts at launch),
-    and no `GAME_EXES` substring among `procs.running()`.
+    (30 s) while `_auto_may_run()` (auto on, installed copy, no `--no-start`, an active tray icon: setup's
+    relaunch drops those flags), the version is not skipped and not `_auto_blocked()`. The tick installs
+    only when `_game_idle()` and `_user_away()`:
+    - `_game_idle()`: `_game_sending()` false, no telemetry for `AUTO_IDLE_S` (300 s; `_tele_seen_at`
+      is set by `_refresh` whenever the status has telemetry, and starts at launch), and no
+      `GAME_EXES` substring among `procs.running()`;
+    - `_user_away()`: the window hidden, no viewable Toplevel (the Advanced dialog), no test tone
+      thread.
+    Otherwise it re-arms. "No" to Update now's question re-arms too.
   - **Installing:** `update_now(auto=True)` skips the source-copy page and the game question, and forces
     `from_window=False` (it comes back `--hidden`). The worker is Update now's own: fresh `check()`,
-    `download()`, then `_install_update`, which checks `_game_idle()` once more and, if a game started,
-    discards the file and re-offers. Before `run_installer` it logs and saves
-    `updates.auto_done = <version>`.
-  - **After it:** `_after_automatic_update` at start clears `auto_done`. If it names this version (and
-    setup did not bring back the old one), a sticky bar note "updated itself" appears with What's new
-    (`_notes_version`).
-  - **Failure:** `_update_failed` records `_auto_failed = <version>` (no automatic retry of it this
-    session), clears `auto_done` and shows the normal failure text prefixed "Automatic".
+    `download()`, then `_install_update`, which checks consent (`_auto_may_run()`, not skipped) and the
+    quiet moment once more. Without consent it discards the file and re-offers (or hides the bar when
+    the check was switched off). If only the quiet moment ended, it keeps the file in `_auto_kept`
+    (version, sha256, Verified). The next worker reuses it when the fresh `check()` lists the same
+    version, digest and size and the file is still there; `run_installer` re-hashes it anyway.
+    `_drop_kept()` deletes it when another version is offered, the offer goes away, or automatic updates
+    are switched off. Before `run_installer` it logs and saves `updates.auto_done = <version>`.
+  - **After it:** `_after_automatic_update` at start clears `auto_done` and sets `_device_warned`, so an
+    unwatched relaunch shows no "device not found" toast.
+    - If it names this version (and setup did not bring back the old one), a sticky bar note "updated
+      itself" appears with What's new (`_notes_version`).
+    - If setup came back (`--update-*`), or it names a newer version, that version goes to
+      `updates.auto_failed`.
+  - **Failure:** the `updates.auto_failed` version is never tried automatically again, in this session
+    or after a restart (`_auto_blocked`, `_set_auto_failed`).
+    - `_update_failed(error, transient)` persists it for an automatic update, clears `auto_done` and
+      shows the normal failure text prefixed "Automatic". The offer then says it waits for Update now.
+    - A `NetworkError` (`transient`) is not a failure: the plain offer again, and a re-arm after
+      `RETRY_AFTER_S[0]`.
+    - The record is cleared when a newer version is offered, or at start once `__version__` has
+      reached it. A manual Update now does not clear it, so a manual attempt that fails cannot start a
+      retry loop.
 - **Release assets:** from 1.0.2 the updater needs only `OpenShaker-Setup-<ver>.exe`, and GitHub's own
   digest of it. build.ps1 still writes `dist\OpenShaker-Setup-<ver>.exe.sha256` next to the installer
   (ASCII, `<lowercase hash>  <name>`, LF), for checking by hand; it is not uploaded. 1.0.1's updater

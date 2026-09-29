@@ -4,7 +4,7 @@ The app asks GitHub for the latest release about 30 s after it starts and every 
 again after a network failure), unless the Advanced setting "Check for updates" is off (updates.check).
 The request carries nothing but a User-Agent naming the version; no notification pops up: the tray
 icon gets a "!" badge and the window a bar (gui.App). Nothing is downloaded until the user clicks
-Update now.
+Update now or, with updates.auto on, until no game is running and the window is closed (gui.App._auto_tick).
 
 Update now (an installed copy only; a source copy opens the Releases page instead):
 - asks GitHub again, then downloads exactly OpenShaker-Setup-<version>.exe from that release (the URL

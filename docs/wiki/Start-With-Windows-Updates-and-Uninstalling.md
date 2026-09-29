@@ -35,7 +35,7 @@ There is **no pop-up or notification**: you see it when you open the window or t
 4. It checks the file's size and its SHA-256 against the ones GitHub lists for that file in the release. If anything does not match, it deletes the download, says so in the bar ("Update to X.Y.Z failed: ... Nothing was installed; Update now tries again.") and installs nothing. It checks the file once more right before running it. If GitHub lists no SHA-256 for the file, nothing is downloaded, and the bar says to get the installer from the release page (**What's new**).
 5. It runs the installer silently. The installer closes OpenShaker, installs the new version over the old one (same folder, no administrator prompt) and starts OpenShaker again: with its window if you clicked **Update now** in the window, in the tray if you used the tray menu. Your settings stay as they are, and so do Start with Windows and the desktop shortcut: whatever you have now is kept.
 6. If the installer stops after it closed OpenShaker, it waits up to 30 seconds for OpenShaker to be gone, then starts the installed copy again, which says in its bar what happened:
-   - **"The update to X.Y.Z did not install"**: the installer stopped before it replaced any file (for example OpenShaker took too long to close). Nothing changed, and the update is offered again.
+   - **"The update to X.Y.Z did not install"**: the installer stopped before it replaced any file (for example OpenShaker took too long to close). Nothing changed, and the update is offered again. After an [automatic update](#automatic-updates) the bar says instead that it will not be installed automatically again: **Update now** is still there.
    - **"The update to X.Y.Z stopped partway"**: it stopped while replacing files (for example a locked file or a full disk). The installer keeps no copy of the files it replaced, so OpenShaker may now be a mix of both versions. Run the installer from the release page (**What's new**) to repair it; if the update is offered again, **Update now** does the same.
 
    If OpenShaker never closed, it is still running and reports the failure itself: if the installer ends, or has not finished after about three minutes, while OpenShaker is still running, the bar says so and **Update now** can be tried again.
@@ -46,7 +46,7 @@ A copy run from source can't update itself: **Update now** opens the release pag
 
 ### Automatic updates
 
-Off unless you switch them on. The first time an update is found, the update bar also asks **"Install updates automatically when no game is running?"** with **Yes** and **No**. It asks only once:
+Off unless you switch them on. When an update is found, the update bar also asks **"Install updates automatically when no game is running?"** with **Yes** and **No**, until you answer it:
 
 - **Yes** switches automatic updates on, for this update and later ones. **No** leaves them off.
 - Clicking **Update now** or **Skip this version** instead counts as an answer too, so the question does not come back.
@@ -55,15 +55,15 @@ Off unless you switch them on. The first time an update is found, the update bar
 
 When they are on and an update is found:
 
-1. OpenShaker waits for a quiet moment: no supported game running on this PC and no game data for 5 minutes (also counted from when OpenShaker started). It looks again every 30 seconds, so an update never starts in the middle of a drive.
-2. It then does exactly what **Update now** does (steps 2 to 5 above): it asks GitHub once more, downloads the installer, checks its size and SHA-256, checks the file again right before running it, and installs it silently. If a game starts during the download, it throws the download away and waits again.
-3. OpenShaker comes back in the tray, never with a window. The next time you open the window, the bar says "OpenShaker X.Y.Z updated itself." (**What's new** opens that release), until the next update is offered.
+1. OpenShaker waits for a quiet moment: no supported game running on this PC, no game data for 5 minutes (also counted from when OpenShaker started), and OpenShaker's own window closed, with no test tone playing. It looks again every 30 seconds, so an update never starts in the middle of a drive, or while you are using OpenShaker.
+2. It then does exactly what **Update now** does (steps 2 to 5 above): it asks GitHub once more, downloads the installer, checks its size and SHA-256, checks the file again right before running it, and installs it silently. Right before installing, it checks the quiet moment again, and that automatic updates and the update check are still switched on. If you switched them off, it throws the download away and installs nothing. If a game started or you opened the window, it keeps the checked download and installs it at the next quiet moment, without downloading it again, as long as GitHub still lists the same file.
+3. OpenShaker comes back in the tray, never with a window and without a notification. The next time you open the window, the bar says "OpenShaker updated itself to X.Y.Z." (**What's new** opens that release), until the next update is offered or OpenShaker restarts.
 
-A skipped version is never installed automatically. If an automatic update fails, it is not tried again automatically for that version: the bar says why, and **Update now** is there as usual. Automatic updates need **Check for updates** on, and work only for the installed copy.
+A skipped version is never installed automatically. If an automatic update fails, that version is not tried again automatically, not even after a restart: the bar says why, and **Update now** is there as usual (a newer version is tried automatically again). A network problem is not a failure: it tries again 10 minutes later. Automatic updates need **Check for updates** on, work only for the installed copy, and wait while OpenShaker runs with `--no-start` or without its tray icon.
 
 ### Updating by hand
 
-Download the new installer from the release page and run it. It asks the running OpenShaker to quit first, waiting up to about 10 s; that also works for a copy run from source. Only if a copy is still running after that does it ask you to close it.
+Download the new installer from the release page and run it. It asks the running OpenShaker to quit first, waiting up to about 10 s; that also works for a copy run from source. Only if a copy is still running after that does it ask you to close it. From 1.0.0 or 1.0.1, install 1.0.2 or later this way once; after that, **Update now** does it.
 
 - Over an installed copy, its two boxes start from what you have now: **Start with Windows** is ticked only if OpenShaker starts with Windows now, and **Create a desktop shortcut** only if the shortcut is there. Unticking a box removes that entry.
 - If you cancel it, or it stops before it has finished, the OpenShaker it closed is started again, in the tray.

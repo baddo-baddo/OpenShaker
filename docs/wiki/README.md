@@ -1,6 +1,6 @@
 # OpenShaker guide
 
-This guide covers **OpenShaker 1.0.1**, a free Windows app by baddo & Claude. It reads live data from racing games
+This guide covers **OpenShaker**, a free Windows app by baddo & Claude. It reads live data from racing games
 and turns it into low-frequency vibration for a ButtKicker or another bass shaker. The app waits in the
 notification area (the tray) and plays whenever a supported game sends data.
 

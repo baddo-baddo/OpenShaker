@@ -85,9 +85,10 @@ Reports are very welcome - bugs, and just as much "how it feels on my setup":
 feedback / report a bug** in the tray menu. Nothing is sent automatically. If you attach the log from
 `%APPDATA%\OpenShaker\logs`, read it first: file paths in it can contain your Windows user name.
 
-**Privacy:** OpenShaker's only contact with the internet is the daily update check, one request to
-GitHub that carries nothing but the app's name and version; it can be switched off under **Advanced...**.
-Game data never leaves your PC.
+**Privacy:** OpenShaker's only contact with the internet is GitHub: an update check about 30 seconds
+after it starts and then once a day, which carries nothing but the app's name and version, and the
+installer download when you click **Update now** (or, if you switched them on, for automatic updates).
+**Advanced... > Check for updates** switches all of it off. Game data never leaves your PC.
 
 ## Documentation
 
@@ -147,9 +148,10 @@ For developers: [development notes](docs/DEVELOPMENT.md), [calibration tools](do
   version** - no pop-ups. **Update now** downloads the installer from this project's GitHub release,
   checks it against the SHA-256 GitHub publishes for it, installs it and starts OpenShaker again; nothing is
   downloaded before you click it. Switch the check off under **Advanced... > Check for updates**.
-  **Automatic updates** are off unless you switch them on: the first time an update is found, the bar
-  asks once whether to install updates automatically (or use **Advanced... > Install updates
-  automatically**). They then install the same way, in the tray, only when no game is running.
+  **Automatic updates** are off unless you switch them on: when an update is found, the bar asks
+  whether to install updates automatically, until you answer (or use **Advanced... > Install updates
+  automatically**). They then install the same way, in the tray, only when no game is running and the
+  window is closed.
 - To uninstall: Windows Settings > Apps > Installed apps > OpenShaker. It asks whether to delete your
   settings too.
 

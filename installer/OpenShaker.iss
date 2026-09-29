@@ -21,8 +21,8 @@ AppPublisher=baddo & Claude
 VersionInfoVersion={#AppVersion}
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
-; one screen: the two tasks and an Install button (without the Ready page, the Tasks page's Next becomes
-; Install), then setup closes and starts the app - no Welcome, folder, group, Ready or Finished pages
+; one screen: the two tasks and an Install button ([Messages] ButtonNext below; Inno itself would say Next),
+; then setup closes and starts the app - no Welcome, folder, group, Ready or Finished pages
 DisableWelcomePage=yes
 DisableDirPage=yes
 DisableProgramGroupPage=yes
